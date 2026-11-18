@@ -1136,11 +1136,6 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "is_default": {
-            "default": false,
-            "title": "Is Default",
-            "type": "boolean"
-          },
           "is_deleted": {
             "default": false,
             "title": "Is Deleted",
@@ -1205,10 +1200,6 @@
             "title": "Is Active",
             "type": "boolean"
           },
-          "is_default": {
-            "title": "Is Default",
-            "type": "boolean"
-          },
           "is_deleted": {
             "title": "Is Deleted",
             "type": "boolean"
@@ -1233,7 +1224,6 @@
           "account_code",
           "account_name",
           "account_type",
-          "is_default",
           "is_active",
           "is_deleted",
           "xero_account_id",
@@ -1289,17 +1279,6 @@
               }
             ],
             "title": "Is Active"
-          },
-          "is_default": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Is Default"
           },
           "is_deleted": {
             "anyOf": [

@@ -195,13 +195,8 @@ def _mirror_module(account: EntityBillAccountXero) -> None:
         )
     if info is None:
         return
-    on = bool(account.is_active) and not account.is_deleted
-    default = on and bool(account.is_default)
-    if default:  # one default per module (uq_account_module_default): clear the others first
-        AccountModule.objects.filter(
-            entity_id=account.entity_id, module_code="PAYMENT_REQUEST", is_default=True
-        ).exclude(account_id=info.id).update(is_default=False)
-    values = {"is_active": on, "is_default": default}
+    # No default account code (owner, 2026-11-18): is_default is left alone.
+    values = {"is_active": bool(account.is_active) and not account.is_deleted}
     AccountModule.objects.update_or_create(
         account_id=info.id,
         module_code="PAYMENT_REQUEST",

@@ -23,8 +23,9 @@ through them.
 ## Account codes (`/api/entity-bill-accounts/*`)
 
 `entity_bill_account_xero` — the expense accounts the Add Payment dialog offers
-(`account_code`, `account_name`, `account_type`, `is_default`, `is_active`, `sort_order`,
-`xero_account_id`). Minty fills it from the Xero chart when a company connects and on every
+(`account_code`, `account_name`, `account_type`, `is_active`, `sort_order`,
+`xero_account_id`; **no default account code** since 2026-11-18 (owner): `is_default` is not
+accepted, answered or written). Minty fills it from the Xero chart when a company connects and on every
 sync accounts-api runs (`POST /api/internal/xero/sync`); this service lists it to cashier and up
 (entity_base is refused, 2026-11-12) and lets elevated roles edit (`check_edit_bill_settings`;
 `bills/tests/test_door_approval.py`). `GET /api/v1/entity-bill-accounts/rights` answers
@@ -37,8 +38,7 @@ archived one (`archived_at` set; it replaced a dead `status != 'deleted'` filter
 Petty Cash's `account_info.status` (Petty Cash's tick state; its publish refuses a non-ACTIVE
 code), so the old "mirror into account_info" was removed on 2026-10-01 - it unticked codes in Petty
 Cash. **The account's `account_module` PAYMENT_REQUEST row follows (2026-11-11):** `PUT /{id}` and
-`DELETE /{id}` set its `is_active` (live and ticked) and `is_default` (one per company: the others
-are cleared first), in the same transaction (`_mirror_module`), as onboarding's step 8 writes
+`DELETE /{id}` set its `is_active` (live and ticked), in the same transaction (`_mirror_module`), as onboarding's step 8 writes
 both. The account is the `account_info` row with this Xero id, else (a Minty company's own) the
 active one with this code; a code added by hand has none and changes no module row. **At least one ticked:** a PUT that would untick the entity's last live
 (`is_deleted=False`) code of a `BILL_SETTINGS_ACCOUNT_TYPES` type answers **409** "Keep at least

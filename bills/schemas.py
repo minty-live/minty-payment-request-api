@@ -323,7 +323,6 @@ class EntityBillAccountXeroCreateIn(Schema):
     account_code: str
     account_name: str = ""
     account_type: str = ""
-    is_default: bool = False
     is_active: bool = True
     is_deleted: bool = False
     xero_account_id: str = ""
@@ -334,7 +333,6 @@ class EntityBillAccountXeroUpdateIn(Schema):
     account_code: str | None = None
     account_name: str | None = None
     account_type: str | None = None
-    is_default: bool | None = None
     is_active: bool | None = None
     is_deleted: bool | None = None
     xero_account_id: str | None = None
@@ -347,7 +345,6 @@ class EntityBillAccountXeroOut(Schema):
     account_code: str
     account_name: str
     account_type: str
-    is_default: bool
     is_active: bool
     is_deleted: bool
     xero_account_id: str

@@ -240,14 +240,18 @@ def test_a_tick_change_moves_the_payment_request_module_row(api, entity, auth_he
 
 
 @pytest.mark.django_db
-def test_the_default_moves_on_the_module_rows_too(api, entity, auth_headers):
-    first, second = _account(entity, "600"), _account(entity, "610")
-    one, two = _info(entity, "600"), _info(entity, "610")
+def test_there_is_no_default_account_code(api, entity, auth_headers):
+    """No default account code (owner, 2026-11-18): is_default is ignored on the way in, written
+    nowhere and not answered."""
+    first = _account(entity, "600")
+    one = _info(entity, "600")
 
-    assert _put(api, auth_headers, first, {"is_default": True}).status_code == 200
-    assert _module(one).is_default is True
-    assert _put(api, auth_headers, second, {"is_default": True}).status_code == 200
-    assert (_module(one).is_default, _module(two).is_default) == (False, True)
+    resp = _put(api, auth_headers, first, {"is_default": True, "is_active": True})
+    assert resp.status_code == 200, resp.content
+    assert "is_default" not in resp.json()
+    first.refresh_from_db()
+    assert first.is_default is False
+    assert _module(one).is_default is False
 
 
 @pytest.mark.django_db
