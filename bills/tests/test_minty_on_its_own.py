@@ -204,6 +204,69 @@ def test_a_line_on_an_account_archived_in_xero_is_refused_by_name(api_client, au
                                                                "or choose another account, then publish again."})
 
 
+class _Answer:
+    def __init__(self, status, body=None):
+        self.status_code, self._body = status, body
+
+    def json(self):
+        return self._body
+
+
+def _archived_rent(entity, bill, stored="ARCHIVED"):
+    from minty_db.models import XeroAccount
+
+    _connected(entity)
+    _copy(entity, "g-469")
+    XeroAccount.objects.filter(entity_id=entity.id, xero_guid="g-469").update(status=stored)
+    rent = _account(entity, "469", "Rent", xero_id="g-469")
+    BillLine.objects.create(bill=bill, description="May rent", account_code="469", line_amount=100)
+    AccountInfo.objects.filter(id=rent.id).update(status="ARCHIVED")  # after: a line takes an active account
+    return rent
+
+
+@pytest.mark.django_db
+def test_an_account_xero_still_archives_is_asked_about_and_refused(test_entity, draft_bill):
+    _archived_rent(test_entity, draft_bill)
+    answer = _Answer(200, {"Accounts": [{"AccountID": "g-469", "Status": "ARCHIVED"}]})
+    with patch("bills.services.books.requests.get", return_value=answer) as asked:
+        refusal = books.publish_refusal(test_entity.id, draft_bill, token=lambda: "tok")
+    assert refusal == "Rent (469) is archived in Xero. Restore it in Xero or choose another account, then publish again."
+    assert asked.call_args.args[0].endswith("/Accounts/g-469")
+    assert asked.call_args.kwargs["headers"]["Xero-Tenant-Id"] == "org-1"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("stored", ["ARCHIVED", "DELETED"])
+def test_an_account_restored_in_xero_since_the_last_sync_publishes(test_entity, draft_bill, stored):
+    """2026-11-18 (Petty Cash's Dine at Venus 2 - Demo): an account restored in Xero after the last
+    sync kept every publish refused. Xero is asked, and its ACTIVE wins (the sync copies only ACTIVE
+    accounts, so an archived one reads DELETED)."""
+    from minty_db.models import XeroAccount
+
+    rent = _archived_rent(test_entity, draft_bill, stored)
+    answer = _Answer(200, {"Accounts": [{"AccountID": "g-469", "Status": "ACTIVE"}]})
+    with patch("bills.services.books.requests.get", return_value=answer):
+        assert books.publish_refusal(test_entity.id, draft_bill, token=lambda: "tok") is None
+    assert XeroAccount.objects.get(entity_id=test_entity.id, xero_guid="g-469").status == "ACTIVE"
+    assert AccountInfo.objects.get(id=rent.id).status == "ACTIVE"
+
+
+@pytest.mark.django_db
+def test_an_archived_account_keeps_the_stored_answer_when_xero_cannot_be_asked(test_entity, draft_bill):
+    import requests
+
+    _archived_rent(test_entity, draft_bill)
+    with patch("bills.services.books.requests.get", side_effect=requests.ConnectionError("down")):
+        assert "is archived in Xero" in books.publish_refusal(test_entity.id, draft_bill, token=lambda: "tok")
+
+    from core.exceptions import BillValidationError
+
+    def no_token():
+        raise BillValidationError("This company is disconnected from Xero. Reconnect Xero to publish.")
+
+    assert "is archived in Xero" in books.publish_refusal(test_entity.id, draft_bill, token=no_token)
+
+
 @pytest.mark.django_db
 def test_a_supplier_of_an_older_organisation_is_not_refused(test_entity, draft_bill):
     """The census (production's data, 2026-11-12): a bill whose last publish went to another

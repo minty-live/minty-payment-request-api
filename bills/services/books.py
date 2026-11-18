@@ -3,7 +3,14 @@ docs/modernisation/xero_optional_database.md). A company that chose "Use Minty i
 onboarding has ``entities.setup_mode = 'minty'`` and no Xero organisation: its suppliers are its own,
 and its bills are never published. Connected later, Xero's rules apply again."""
 
+import logging
+from collections.abc import Callable
+
+import requests
+from django.utils import timezone
 from minty_db.models import AccountInfo, Entity, XeroAccount
+
+logger = logging.getLogger("minty-api")
 
 NOT_IN_XERO = "This company keeps its books in Minty and isn't connected to Xero, so there's nowhere to publish to."
 #: Connecting Xero later (Settings Phase 2, 2026-11-11): signed in, the accounts not matched yet.
@@ -17,6 +24,8 @@ STALE_ACCOUNT = ("{name} ({code}) isn't matched to your Xero organisation. Match
                  "Integration, then publish again.")
 ARCHIVED_ACCOUNT = ("{name} ({code}) is archived in Xero. Restore it in Xero or choose another account, "
                     "then publish again.")
+#: Asking Xero about an archived account holds the Publish click: short.
+ACCOUNT_TIMEOUT = (5, 15)
 
 
 def minty_on_its_own(entity_id) -> bool:
@@ -25,10 +34,11 @@ def minty_on_its_own(entity_id) -> bool:
     return Entity.objects.filter(id=entity_id, setup_mode="minty").exists()
 
 
-def publish_refusal(entity_id, bill) -> str | None:
+def publish_refusal(entity_id, bill, token: Callable[[], str | None] | None = None) -> str | None:
     """Why this bill can't go to Xero, from who keeps the books - or None. A company still in Minty
     (no organisation, or one recorded but its accounts not matched yet) stays in Minty; once Xero is
-    connected and matched, any bill can go, however old (owner, 2026-11-18)."""
+    connected and matched, any bill can go, however old (owner, 2026-11-18). ``token`` gives a Xero
+    access token, asked for only when an account reads archived (``_restored_in_xero``)."""
     entity = Entity.objects.filter(id=entity_id).values(
         "setup_mode", "xero_org_id", "xero_matching").first()
     if entity is None:
@@ -37,11 +47,52 @@ def publish_refusal(entity_id, bill) -> str | None:
         return STILL_MATCHING if entity["xero_org_id"] else NOT_IN_XERO
     if entity["xero_matching"] in HOLDING_MATCHES:
         return STILL_MATCHING
-    stale = stale_matches(entity_id, entity["xero_org_id"], bill)
+    stale = stale_matches(entity_id, entity["xero_org_id"], bill, token)
     return "\n".join(stale) if stale else None
 
 
-def stale_matches(entity_id, org, bill) -> list[str]:
+def _restored_in_xero(entity_id, org: str, token: Callable[[], str | None], account: AccountInfo) -> bool:
+    """Ask Xero (``GET /Accounts/{id}``) whether an account the copies hold as archived is ACTIVE again.
+    The copies change only when accounts-api's sync runs (opening Settings), so an account restored in
+    Xero since then would hold every publish (2026-11-18). ACTIVE: the copy and ``account_info`` read
+    ACTIVE again, as the next sync would make them. Any other answer, no token, or Xero not answering
+    keeps the stored word (logged)."""
+    from bills.services.xero_publish_service import XERO_API_BASE
+
+    guid = account.xero_account_id
+    try:
+        access_token = token()
+    except Exception as exc:  # the token service's own refusal; the stored word answers
+        logger.warning("Publish: no Xero token to check archived account %s: %s", guid, exc)
+        return False
+    if not access_token:
+        logger.warning("Publish: no Xero token to check archived account %s", guid)
+        return False
+    try:
+        response = requests.get(f"{XERO_API_BASE}/Accounts/{guid}",
+                                headers={"Authorization": f"Bearer {access_token}", "Accept": "application/json",
+                                         "Xero-Tenant-Id": org}, timeout=ACCOUNT_TIMEOUT)
+    except requests.RequestException as exc:
+        logger.warning("Publish: Xero unreachable checking archived account %s: %s", guid, exc)
+        return False
+    if response.status_code != 200:
+        logger.warning("Publish: Xero answered %s checking archived account %s", response.status_code, guid)
+        return False
+    try:
+        found = (response.json() or {}).get("Accounts") or []
+    except ValueError:
+        logger.warning("Publish: Xero's answer for archived account %s was not JSON", guid)
+        return False
+    if not found or str(found[0].get("Status") or "").strip().upper() != "ACTIVE":
+        return False
+    XeroAccount.objects.filter(entity_id=entity_id, xero_org_id=org, xero_guid=guid).update(
+        status="ACTIVE", synced_at=timezone.now())
+    AccountInfo.objects.filter(id=account.id).exclude(status="ACTIVE").update(status="ACTIVE")
+    logger.info("Publish: account %s (%s) is active in Xero again; its stored status updated", account.id, guid)
+    return True
+
+
+def stale_matches(entity_id, org, bill, token: Callable[[], str | None] | None = None) -> list[str]:
     """The bill's accounts that aren't in the company's current Xero organisation, or that Xero
     archived, one sentence each (Phase 3 of the matching, owner 2026-11-12). An account is stale with
     no Xero id, or with one the organisation's copies don't hold (when the company has copies at all:
@@ -58,6 +109,7 @@ def stale_matches(entity_id, org, bill) -> list[str]:
         named = {"name": account.name, "code": account.xero_code or account.code or "-"}
         if not account.xero_account_id or (copies and account.xero_account_id not in copies):
             out.append(STALE_ACCOUNT.format(**named))
-        elif copies and copies[account.xero_account_id] != "ACTIVE":
+        elif copies and copies[account.xero_account_id] != "ACTIVE" and not (
+                token and _restored_in_xero(entity_id, org, token, account)):
             out.append(ARCHIVED_ACCOUNT.format(**named))
     return out

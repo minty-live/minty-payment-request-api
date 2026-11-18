@@ -53,7 +53,11 @@ doesn't hold it. Then a stale match is refused, one sentence an account, before 
 account the bill uses with no Xero id, or one the current organisation's copies (`xero_account`) don't
 hold - "Rent (469) isn't matched to your Xero organisation. Match it in Settings, under Integration,
 then publish again." - or one Xero archived - "Rent (469) is archived in Xero. Restore it in Xero or
-choose another account, then publish again." A company with no copies at all isn't held (older data).
+choose another account, then publish again." Before that refusal the publish asks Xero about each such
+account (`GET /Accounts/{id}`; the token is fetched only then): one restored in Xero since the last
+sync publishes, and its copy and `account_info` read ACTIVE again (2026-11-18; the copies change only
+when Settings syncs). No token, or Xero not answering, leaves the stored status in charge. A company
+with no copies at all isn't held (older data).
 Suppliers aren't held: the publish re-creates (Petty Cash) or re-publishes into the current
 organisation (Payment Request) as before. Checked on production's data (local `postgres`, 2026-11-12):
 4 companies have an unpublished record on an account Xero archived; no other publish changes.

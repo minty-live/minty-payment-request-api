@@ -475,7 +475,8 @@ def publish_bill_endpoint(request, bill_id: str):
     bill = _get_bill_or_404(bill_id, request.entity_id)
     # Xero optional (2026-11-10): nowhere to publish to; Settings Phase 2 (2026-11-11): still
     # matching.
-    if refusal := publish_refusal(request.entity_id, bill):
+    if refusal := publish_refusal(request.entity_id, bill, token=lambda: resolve_xero_access_token_for_entity(
+            request.entity_id, str(request.auth_user.id))):
         return 422, {"detail": refusal}
 
     access_token = resolve_xero_access_token_for_entity(
