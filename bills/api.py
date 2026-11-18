@@ -460,7 +460,7 @@ def publish_bill_endpoint(request, bill_id: str):
     check_publish_xero(request.entity_role)
     bill = _get_bill_or_404(bill_id, request.entity_id)
     # Xero optional (2026-11-10): nowhere to publish to; Settings Phase 2 (2026-11-11): still
-    # matching, or a bill from before Xero was connected.
+    # matching.
     if refusal := publish_refusal(request.entity_id, bill):
         return 422, {"detail": refusal}
 

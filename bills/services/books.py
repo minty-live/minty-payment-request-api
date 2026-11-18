@@ -17,8 +17,6 @@ STALE_ACCOUNT = ("{name} ({code}) isn't matched to your Xero organisation. Match
                  "Integration, then publish again.")
 ARCHIVED_ACCOUNT = ("{name} ({code}) is archived in Xero. Restore it in Xero or choose another account, "
                     "then publish again.")
-#: Finish set ``entities.xero_publish_from`` (owner: only records from then on go to Xero).
-BEFORE_XERO = "This payment request is from before Xero was connected, so it stays in Minty."
 
 
 def minty_on_its_own(entity_id) -> bool:
@@ -29,20 +27,16 @@ def minty_on_its_own(entity_id) -> bool:
 
 def publish_refusal(entity_id, bill) -> str | None:
     """Why this bill can't go to Xero, from who keeps the books - or None. A company still in Minty
-    (no organisation, or one recorded but its accounts not matched yet), and a bill dated before
-    Xero was connected (its invoice date, else the day it was made), stay in Minty."""
+    (no organisation, or one recorded but its accounts not matched yet) stays in Minty; once Xero is
+    connected and matched, any bill can go, however old (owner, 2026-11-18)."""
     entity = Entity.objects.filter(id=entity_id).values(
-        "setup_mode", "xero_org_id", "xero_publish_from", "xero_matching").first()
+        "setup_mode", "xero_org_id", "xero_matching").first()
     if entity is None:
         return None
     if entity["setup_mode"] == "minty":
         return STILL_MATCHING if entity["xero_org_id"] else NOT_IN_XERO
     if entity["xero_matching"] in HOLDING_MATCHES:
         return STILL_MATCHING
-    cut_off = entity["xero_publish_from"]
-    dated = bill.invoice_date or (bill.created_at.date() if bill.created_at else None)
-    if cut_off and dated and dated < cut_off:
-        return BEFORE_XERO
     stale = stale_matches(entity_id, entity["xero_org_id"], bill)
     return "\n".join(stale) if stale else None
 
