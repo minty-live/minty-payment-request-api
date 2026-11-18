@@ -3693,6 +3693,46 @@
         ]
       }
     },
+    "/api/v1/bills/extract/status/": {
+      "get": {
+        "description": "``{\"enabled\": bool}`` - the new-bill form offers \"Read the invoice\" only when\n``BILL_AI_ENABLED`` is on; the invoice is read only on that press (owner, 2026-11-18). Asked by\nthe same people as ``POST /extract/``.",
+        "operationId": "bills_api_extract_status_endpoint",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Whether the invoice reader is switched on",
+        "tags": [
+          "Bills"
+        ]
+      }
+    },
     "/api/v1/bills/submit/": {
       "post": {
         "operationId": "bills_api_submit_bill_endpoint",

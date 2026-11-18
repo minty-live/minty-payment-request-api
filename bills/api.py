@@ -161,6 +161,20 @@ def save_draft_endpoint(request, payload: BillDraftIn):
     return 201, _bill_to_out(bill)
 
 
+@bills_router.get(
+    "/extract/status/",
+    response={200: dict, 403: ErrorOut},
+    summary="Whether the invoice reader is switched on",
+)
+def extract_status_endpoint(request):
+    """``{"enabled": bool}`` - the new-bill form offers "Read the invoice" only when
+    ``BILL_AI_ENABLED`` is on; the invoice is read only on that press (owner, 2026-11-18). Asked by
+    the same people as ``POST /extract/``."""
+    check_not_system_superuser(request, "read invoices")
+    check_create_bill(request.entity_role)
+    return {"enabled": invoice_reader.CONFIG.enabled()}
+
+
 @bills_router.post(
     "/extract/",
     response={200: dict, 403: ErrorOut, 422: ErrorOut},

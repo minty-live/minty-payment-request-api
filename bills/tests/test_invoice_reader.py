@@ -22,6 +22,7 @@ pytestmark = pytest.mark.django_db
 PDF = b"%PDF-1.4 an invoice"
 ORG = "org-current"
 URL = "/api/v1/bills/extract/"
+STATUS_URL = "/api/v1/bills/extract/status/"
 
 
 def _reply(**over) -> str:
@@ -232,6 +233,29 @@ def test_only_someone_who_may_create_a_bill_may_ask(api_client, auth_headers, te
     assert model.requests == []
     no_token = api_client.post(URL, data={"invoice": SimpleUploadedFile("a.pdf", PDF)})
     assert no_token.status_code == 401
+
+
+@pytest.mark.parametrize(("switch", "enabled"), [("true", True), ("false", False), (None, False)])
+def test_the_form_learns_whether_the_reader_is_on(api_client, auth_headers, test_user_entity, monkeypatch,
+                                                   switch, enabled):
+    """The form offers "Read the invoice" only when ``BILL_AI_ENABLED`` is on (off unless set)."""
+    if switch is None:
+        monkeypatch.delenv("BILL_AI_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("BILL_AI_ENABLED", switch)
+
+    resp = api_client.get(STATUS_URL, **auth_headers)
+
+    assert resp.status_code == 200 and resp.json() == {"enabled": enabled}
+
+
+def test_the_reader_s_status_is_asked_by_those_who_may_read(api_client, auth_headers, test_user, test_entity,
+                                                            monkeypatch):
+    monkeypatch.setenv("BILL_AI_ENABLED", "true")
+    UserEntity.objects.create(user=test_user, entity=test_entity, role="entity_base", approved=True)
+
+    assert api_client.get(STATUS_URL, **auth_headers).status_code == 403
+    assert api_client.get(STATUS_URL).status_code == 401
 
 
 # --- the reply is untrusted input --------------------------------------------------------------

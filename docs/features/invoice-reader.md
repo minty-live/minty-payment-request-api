@@ -1,6 +1,7 @@
 # Invoice reader - reading an invoice into the new-bill form
 
-When an invoice is attached in minty-payment-request-web's new-bill form, a vision model reads it
+When an invoice is attached in minty-payment-request-web's new-bill form and the person presses
+**Read the invoice** (never on attaching it - owner, 2026-11-18), a vision model reads it
 and the form's empty fields are **filled as suggestions** the person checks (owner, 2026-11-04):
 the supplier, the invoice and due dates, the amount, the description and the account. Nothing is
 saved until Confirm or Save as Draft, a supplier is never created automatically, and the form
@@ -12,6 +13,9 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
 
 ## Where it lives
 
+- `GET /api/v1/bills/extract/status/` (`bills/api.py::extract_status_endpoint`, 2026-11-18) -
+  `{"enabled": bool}`, `BILL_AI_ENABLED` read on the call: the form offers "Read the invoice" only
+  when it is on. Asked by the same people as the read (403 otherwise).
 - `POST /api/v1/bills/extract/` (`bills/api.py::extract_invoice_endpoint`) - multipart, one
   `invoice`. Who may ask: `check_create_bill` and not a system superuser outside their own
   company (403). The file: one PDF / JPEG / PNG of at most 10 MB, judged by its bytes
