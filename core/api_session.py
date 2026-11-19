@@ -1,12 +1,12 @@
-"""Session and token endpoints for the billing module."""
+"""Session endpoints for the billing module.
+
+There is no token refresh (Phase 9, owner's S2, 2026-11-19): the web keeps the 30-minute hand-off
+token from minty-accounts-api and, on a 401, hands the person over again - so Payment Request
+signs out when Minty does (``core/auth.py``, the sign-in check).
+"""
 
 import logging
-from datetime import UTC, datetime, timedelta
 
-import jwt
-from django.conf import settings
-from minty_db.enums import SystemRole
-from minty_shared import tokens
 from ninja import Router, Schema
 
 from core.auth import SelfBearerAuth
@@ -15,17 +15,10 @@ logger = logging.getLogger("minty-api")
 
 session_router = Router(tags=["Session"])
 
-BILLING_TOKEN_HOURS = 8
-
 
 class BillingSessionOut(Schema):
     role: str
     entity_id: str
-
-
-class TokenRefreshOut(Schema):
-    token: str
-    expires_in: int  # seconds
 
 
 class XeroStatusOut(Schema):
@@ -68,84 +61,6 @@ def billing_session(request):
         role=request.entity_role,
         entity_id=request.entity_id,
     )
-
-
-@session_router.post(
-    "/token/refresh",
-    response={200: TokenRefreshOut},
-    auth=None,  # auth handled explicitly below, so a missing token is our own 401
-    summary="Refresh the billing JWT before it expires",
-)
-def token_refresh(request):
-    """Exchange a valid (non-expired) billing JWT for a fresh 8-hour token.
-
-    The caller must supply their current token in the Authorization header.
-    Expired tokens are rejected — re-entry from Module 1 is required in that case.
-
-    Uses ``SelfBearerAuth`` for the same reason the person-level reads do: the frontend
-    refreshes pre-emptively before ANY call, so refusing a caller who holds no role on the
-    entity in their token made every screen — including the ones that need no entity at
-    all — report a timed-out session. The refreshed token is re-minted from
-    ``request.entity_id``/``entity_role``, so an unscoped context yields an unscoped
-    token: narrower than the one presented, never wider.
-    """
-    raw_token = (
-        (request.headers.get("Authorization", "") or "").removeprefix("Bearer ").strip()
-    )
-    if not raw_token:
-        from ninja.errors import HttpError
-
-        raise HttpError(401, "Your session has expired. Sign in again to keep going.")
-
-    auth = SelfBearerAuth()
-    user = auth.authenticate(request, raw_token)
-    if user is None:
-        from ninja.errors import HttpError
-
-        raise HttpError(401, "Your session has expired. Sign in again to keep going.")
-
-    expires_in = BILLING_TOKEN_HOURS * 3600
-    now = datetime.now(UTC)
-
-    # Re-resolve module entitlements from DB so the refreshed token reflects
-    # any changes (e.g. an admin flipped BILL on after the initial handoff).
-    # We never copy these forward from the old token because they could be
-    # stale — entitlements are the kind of thing that must always be authoritative.
-    from core.entitlements import get_module_claims
-
-    module_claims = get_module_claims(str(request.entity_id or ""))
-
-    # The person's standing is re-derived from the authenticated request, never copied:
-    # dropping these made a non-member super admin's refreshed token look like an
-    # ordinary member's, so the web showed write controls the API then refused (403).
-    # View-only is Flask's is_superuser_readonly: a super admin who is NOT a member.
-    is_system_superuser = bool(getattr(request, "is_system_superuser", False))
-    is_entity_member = bool(getattr(request, "is_entity_member", False))
-    claims = {
-        "user_id": str(request.auth_user.id),
-        "entity_id": str(request.entity_id or ""),
-        "role": request.entity_role or "",
-        "system_role": SystemRole.SUPERADMIN.value if is_system_superuser else "",
-        "is_view_only": is_system_superuser and not is_entity_member,
-        "module": "billing",
-        **module_claims,
-        "exp": now + timedelta(seconds=expires_in),
-        "iat": now,
-    }
-    # The session id (the subscription notice keys on it) is the only claim carried over:
-    # it names the sign-in, which a refresh continues. The token was verified just above.
-    sid = tokens.decode_bearer(raw_token, settings.SECRET_KEY).get("sid")
-    if sid:
-        claims["sid"] = sid
-
-    new_token = jwt.encode(claims, settings.SECRET_KEY, algorithm="HS256")
-
-    logger.info(
-        "Token refreshed user_id=%s entity_id=%s",
-        str(request.auth_user.id),
-        request.entity_id,
-    )
-    return TokenRefreshOut(token=new_token, expires_in=expires_in)
 
 
 @session_router.get(

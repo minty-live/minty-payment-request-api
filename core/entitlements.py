@@ -1,7 +1,7 @@
 """Module entitlement resolver — Django mirror of Flask's ``_is_module_enabled``.
 
 Single source for "is module X enabled for entity Y" so every consumer
-(token refresh, future per-route guards) agrees. Reads the same
+(`/auth/entitlements`, future per-route guards) agrees. Reads the same
 ``entity_function`` / ``entity_function_map`` tables Flask seeds and
 backfills, applying the same fallback semantics: explicit map row wins,
 otherwise the catalog row's ``is_active`` decides, otherwise default to
@@ -66,10 +66,9 @@ def is_module_enabled(entity_id: str, function_code: str) -> bool:
 def get_module_claims(entity_id: str) -> dict:
     """Return the JWT-ready claim shape for both modules.
 
-    Used by ``token_refresh`` so the frontend keeps the same module-visibility
-    signals across the 8-hour refresh cycle as it had in the initial handoff,
-    and by ``/auth/entitlements`` as the DB-fresh answer the frontend trusts
-    over its own cookie.
+    Used by ``/auth/entitlements`` as the DB-fresh answer the frontend trusts
+    over its own cookie (the 8-hour token refresh that also used it is gone,
+    Phase 9).
 
     NO COMPANY MEANS NO MODULES. Stated here as well as in ``is_module_enabled``
     because this is the one that gets PUBLISHED: the frontend trusts this answer

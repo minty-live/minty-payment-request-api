@@ -106,6 +106,17 @@ class BearerAuth(HttpBearer):
             # token minted on a host a little ahead is not refused as "not yet valid".
             payload = tokens.decode_bearer(token, key)
             user = User.objects.get(id=payload["user_id"])
+            # The sign-in behind the token (Phase 9): signed out of Minty, or 60 minutes without
+            # activity, is a 401 here too, and the web hands the person over again. Asked at
+            # most once a minute per sid, and the ask keeps the sign-in alive; a token with no
+            # sid (minted before Phase 9) passes until it expires.
+            # Ended - whether the token is still valid or has run out too (below) - the 401 says
+            # so (``reason: session_expired``, owner 2026-11-19), and the web shows "Your session
+            # has expired" instead of handing the person over quietly.
+            if not tokens.session_alive(payload.get("sid"), settings.ACCOUNTS_API_URL, key):
+                logger.info("Auth rejected: the token's sign-in has ended")
+                tokens.mark_session_ended(request)
+                return None
             user_id = payload["user_id"]
             token_entity_id = (payload.get("entity_id") or "").strip()
             header_entity_id = (request.headers.get("X-Entity-Id") or "").strip()
@@ -223,6 +234,8 @@ class BearerAuth(HttpBearer):
             return user
         except jwt.ExpiredSignatureError:
             logger.warning("Auth rejected: token expired")
+            if tokens.session_ended(token, settings.ACCOUNTS_API_URL, settings.SECRET_KEY):
+                tokens.mark_session_ended(request)
             return None
         except (jwt.DecodeError, jwt.InvalidTokenError) as exc:
             logger.warning("Auth rejected: invalid token — %s", exc)
@@ -264,9 +277,6 @@ class SelfBearerAuth(BearerAuth):
     * ``/auth/entitlements`` reads ``get_module_claims(request.entity_id or "")``. It was
       already written to tolerate an empty entity and answers "no modules enabled", which
       is the truthful answer for somebody with no role on the company they asked about.
-    * ``/auth/token/refresh`` re-mints from ``request.entity_id or ""`` and
-      ``request.entity_role or ""``, so an unscoped context produces an unscoped token —
-      narrower than the one presented, never wider.
 
     WHAT IT MUST NOT BE USED FOR: anything that reads or writes a company's data. Bills,
     payments and attachments belong to an entity, and their gate is that you hold a role on

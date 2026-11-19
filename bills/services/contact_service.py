@@ -20,6 +20,7 @@ import logging
 import uuid
 
 import requests
+from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from minty_db.models import Entity, XeroContact, XeroContactSync
@@ -241,8 +242,17 @@ def get_entity_bill_contacts(
             "Entity %s is connected, fetching contacts from Xero API", entity_id
         )
         xero_contacts = _fetch_contacts_from_xero(access_token, xero_org_id)
+        # one contact list (owner's decisions doc C3, M1, 2026-11-19): a contact Minty deleted or
+        # merged away is never offered, though Xero still lists it
+        retired = set(
+            XeroContactSync.objects.filter(entity_id=entity_id, xero_contact_id__isnull=False)
+            .filter(Q(record_status="archived") | Q(merged_into__isnull=False))
+            .values_list("xero_contact_id", flat=True)
+        )
         contacts = [
-            _xero_to_bill_contact(c, entity_id, xero_org_id) for c in xero_contacts
+            _xero_to_bill_contact(c, entity_id, xero_org_id)
+            for c in xero_contacts
+            if c.get("ContactID") not in retired
         ]
         contacts = _merge_db_contacts_missing_from_live(
             contacts, entity_id, category, xero_org_id
@@ -323,10 +333,47 @@ def _xero_refusal(resp) -> str:
     return "Xero rejected the new contact. Check the name and try again."
 
 
+def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> str | None:
+    """Xero's active contact named ``name`` (case and extra spaces ignored) the company doesn't hold
+    yet, searched live: ``GET /Contacts?searchTerm=`` is Xero's loose case-insensitive search (the
+    accounting API spec's ``getContacts``), so only an exact name counts. Raises
+    ``BillValidationError`` when Xero can't be asked."""
+    headers = {"Authorization": f"Bearer {access_token}", "Xero-Tenant-Id": xero_org_id, "Accept": "application/json"}
+    try:
+        resp = requests.get(
+            f"{_xero_api_base()}/Contacts",
+            headers=headers,
+            params={"searchTerm": " ".join(name.split()), "page": 1},
+            timeout=30,
+        )
+    except requests.RequestException as exc:
+        logger.warning("Xero contact search failed: %s", exc)
+        raise BillValidationError("Could not reach Xero to look for the contact. Try again.") from exc
+    if resp.status_code != 200:
+        logger.warning("Xero contact search returned %s: %s", resp.status_code, (resp.text or "")[:500])
+        raise BillValidationError(_xero_refusal(resp))
+    try:
+        contacts = (resp.json() or {}).get("Contacts") or []
+    except ValueError:
+        raise BillValidationError("Xero replied in a shape I didn't expect. Mind trying again?") from None
+    return next(
+        (
+            c["ContactID"]
+            for c in contacts
+            if c.get("ContactID")
+            and _key(c.get("Name")) == _key(name)
+            and str(c.get("ContactStatus") or "ACTIVE").upper() == "ACTIVE"
+            and c["ContactID"] not in held
+        ),
+        None,
+    )
+
+
 def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str, str]:
-    """``(ContactID, name)`` in the company's Xero for ``name``: the stored Xero contact of that
-    name the company doesn't hold yet (no duplicate in Xero), else one made there. Raises
-    ``BillValidationError`` with Xero's reason. The "+ Add" and the publish heal share it."""
+    """``(ContactID, name)`` in the company's Xero for ``name`` - never a duplicate there (owner's
+    decisions doc C1/C5, 2026-11-19): the stored Xero contact of that name the company doesn't hold
+    yet, else Xero's searched live, else one made there as a supplier. Raises
+    ``BillValidationError`` with Xero's reason. The "+ Add" and the publish share it."""
     xero_org_id = str(entity.xero_org_id)
     held = set(
         XeroContactSync.objects.filter(entity_id=entity.id, xero_contact_id__isnull=False).values_list(
@@ -343,6 +390,9 @@ def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str,
     )
     if copy is not None:
         return copy.xero_guid, " ".join(name.split())[:150]
+    found = _search_xero(xero_org_id, access_token, name, held)
+    if found is not None:
+        return found, " ".join(name.split())[:150]
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Xero-Tenant-Id": xero_org_id,
@@ -351,7 +401,10 @@ def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str,
     }
     try:
         resp = requests.post(
-            f"{_xero_api_base()}/Contacts", headers=headers, json={"Contacts": [{"Name": name}]}, timeout=30
+            f"{_xero_api_base()}/Contacts",
+            headers=headers,
+            json={"Contacts": [{"Name": name, "IsCustomer": False, "IsSupplier": True}]},
+            timeout=30,
         )
     except requests.RequestException as exc:
         logger.warning("Xero create contact request failed: %s", exc)
@@ -371,34 +424,91 @@ def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str,
     return contact_id, (xc.get("Name") or name).strip()[:150]
 
 
-def _active_in_xero(entity: Entity, access_token: str, guid: str) -> None:
-    """Set an archived Xero contact ACTIVE again, and Minty's copy of it with it."""
-    xero_org_id = str(entity.xero_org_id)
+# ---- a contact archived in Xero (owner's decisions doc C4, 2026-11-19) ------------------------------
+
+#: accounts-api's relink - its own scope (``xero/views.internal_contact_relink``).
+RELINK_SCOPE = "xero-contact-relink"
+RELINK_TIMEOUT = (5, 30)
+RELINK_UNREACHABLE = "I couldn't reach the contacts just now. Mind trying again in a moment?"
+#: Minty never restores anything in the customer's Xero: the person restores it there, or maps now.
+ARCHIVED_IN_XERO = "{name} is archived in Xero. Restore it in Xero, or map it to another contact now."
+
+
+def xero_contact_status(xero_org_id: str, access_token: str, guid: str) -> dict | None:
+    """Xero's contact ``guid`` (``ContactStatus``, ``MergedToContactID`` - returned when a contact is
+    fetched by its id), or None when Xero no longer has it. Raises ``BillValidationError``."""
     try:
-        resp = requests.post(
-            f"{_xero_api_base()}/Contacts",
-            headers={
-                "Authorization": f"Bearer {access_token}",
-                "Xero-Tenant-Id": xero_org_id,
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-            },
-            json={"Contacts": [{"ContactID": guid, "ContactStatus": "ACTIVE"}]},
+        resp = requests.get(
+            f"{_xero_api_base()}/Contacts/{guid}",
+            headers={"Authorization": f"Bearer {access_token}", "Xero-Tenant-Id": xero_org_id, "Accept": "application/json"},
             timeout=30,
         )
     except requests.RequestException as exc:
-        logger.warning("Xero bring-back contact request failed: %s", exc)
-        raise BillValidationError("Could not reach Xero to bring the contact back. Try again.") from exc
+        logger.warning("Xero contact check failed: %s", exc)
+        raise BillValidationError("Xero didn't answer just now. Mind trying again in a moment?") from exc
+    if resp.status_code == 404:
+        return None
     if resp.status_code != 200:
-        logger.warning("Xero bring-back contact returned %s: %s", resp.status_code, (resp.text or "")[:500])
-        raise BillValidationError(_xero_refusal(resp))
-    XeroContact.objects.filter(entity_id=entity.id, xero_org_id=xero_org_id, xero_guid=guid).update(status="ACTIVE")
+        logger.warning("Xero contact check returned %s for %s", resp.status_code, guid)
+        raise BillValidationError("Xero didn't answer just now. Mind trying again in a moment?")
+    try:
+        contacts = (resp.json() or {}).get("Contacts") or []
+    except ValueError:
+        raise BillValidationError("Xero replied in a shape I didn't expect. Mind trying again?") from None
+    return contacts[0] if contacts else None
+
+
+def relink(entity_id: str, contact_id, guid: str, reason: str, user_id=None) -> dict:
+    """The supplier pointed at Xero contact ``guid`` - merged into the supplier already holding it,
+    if any - through accounts-api, the one implementation. Raises ``BillValidationError``."""
+    from minty_shared import tokens
+
+    claims = {"user_id": str(user_id)} if user_id else {}
+    assertion = tokens.service_assertion(settings.SECRET_KEY, RELINK_SCOPE, entity_id, **claims)
+    try:
+        resp = requests.post(
+            f"{settings.ACCOUNTS_API_URL}/api/internal/xero/contacts/{contact_id}/relink",
+            headers=tokens.assertion_headers(assertion),
+            json={"xero_contact_id": guid, "reason": reason},
+            timeout=RELINK_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        logger.error("Contact relink: accounts-api unreachable for contact %s: %s", contact_id, exc)
+        raise BillValidationError(RELINK_UNREACHABLE) from None
+    try:
+        body = resp.json()
+    except ValueError:
+        body = {}
+    if resp.status_code != 200:
+        logger.error("Contact relink: accounts-api answered %s for contact %s", resp.status_code, contact_id)
+        raise BillValidationError(body.get("error") if resp.status_code in (400, 404, 409) and body.get("error")
+                                  else RELINK_UNREACHABLE)
+    return body
+
+
+def archived_bill_contact(entity: Entity, bill, access_token: str) -> dict | None:
+    """The bill's supplier when Xero has archived it (C4), asked of Xero before the publish: one Xero
+    merged into another follows it (relinked through accounts-api, no prompt) and None comes back;
+    one archived with no merge comes back ``{id, name}`` for the person to restore in Xero or map now.
+    Raises ``BillValidationError`` when Xero or accounts-api can't be asked."""
+    row = XeroContactSync.objects.filter(id=bill.contact_id).first() if bill.contact_id else None
+    if row is None or not row.xero_contact_id:
+        return None  # not in Xero yet: found or made at publish (C1)
+    found = xero_contact_status(str(entity.xero_org_id), access_token, row.xero_contact_id)
+    if found is None or str(found.get("ContactStatus") or "ACTIVE").upper() != "ARCHIVED":
+        return None
+    target = found.get("MergedToContactID")
+    if target:
+        relink(str(entity.id), row.id, target, "merged_in_xero")
+        logger.info("publish: supplier %s followed Xero's merge into %s", row.id, target)
+        return None
+    return {"id": str(row.id), "name": row.name}
 
 
 def _brought_back(entity: Entity, name: str, offline: bool, token_for) -> XeroContactSync | None:
     """The supplier the company deleted with this name, brought back (onboarding-api's chart rule,
     owner 2026-11-12): its archived row active again, or Xero's archived contact of the name linked
-    again - ACTIVE in Xero when it is there. Offline, one still linked to Xero waits."""
+    again as it stands - never restored in Xero (C4)."""
     gone = sorted(
         (
             row
@@ -411,12 +521,8 @@ def _brought_back(entity: Entity, name: str, offline: bool, token_for) -> XeroCo
     )
     if gone:
         row = gone[0]
-        if row.xero_contact_id:
-            if offline:
-                raise BillValidationError(
-                    f"{row.name} was archived in Xero. Ask an admin to reconnect Xero to bring it back."
-                )
-            _active_in_xero(entity, token_for(), row.xero_contact_id)
+        # Minty never restores anything in the customer's Xero (owner's decisions doc C4,
+        # 2026-11-19): the row comes back here; if Xero still has it archived, publish asks
         XeroContactSync.objects.filter(id=row.id).update(record_status="active")
         row.record_status = "active"
         logger.info("Supplier %s brought back for company %s", row.id, entity.id)
@@ -440,7 +546,7 @@ def _brought_back(entity: Entity, name: str, offline: bool, token_for) -> XeroCo
     )
     if copy is None:
         return None
-    _active_in_xero(entity, token_for(), copy.xero_guid)
+    # linked as it stands, not restored (C4): publish asks about an archived one
     row = XeroContactSync.objects.create(
         entity_id=entity.id,
         name=copy.name[:150],

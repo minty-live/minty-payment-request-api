@@ -22,8 +22,9 @@ HOLDING_MATCHES = ("first", "new_accounts", "new_org")
 #: archived it. (Suppliers aren't held: the publish re-creates one Xero doesn't know, as it always has.)
 STALE_ACCOUNT = ("{name} ({code}) isn't matched to your Xero organisation. Match it in Settings, under "
                  "Integration, then publish again.")
-ARCHIVED_ACCOUNT = ("{name} ({code}) is archived in Xero. Restore it in Xero or choose another account, "
-                    "then publish again.")
+#: The owner's decisions doc A3 (2026-11-19): an account Xero archived or removed is mapped again.
+ARCHIVED_ACCOUNT = ("{name} ({code}) is archived in Xero. Please check it in Xero, then map this account to the one "
+                    "you want to use (Settings, under General), and publish again.")
 #: Asking Xero about an archived account holds the Publish click: short.
 ACCOUNT_TIMEOUT = (5, 15)
 
@@ -101,7 +102,15 @@ def stale_matches(entity_id, org, bill, token: Callable[[], str | None] | None =
     from bills.models import BillLine
 
     org = str(org or "")
-    account_ids = {a for a in BillLine.objects.filter(bill_id=bill.id).values_list("account_id", flat=True) if a}
+    lines = list(BillLine.objects.filter(bill_id=bill.id).values_list("account_id", "account_code"))
+    account_ids = {a for a, _code in lines if a}
+    # a line saved with only a code while its account was already gone from Xero has no account_id
+    # (``BillLine.save`` picks only active accounts) - it is held too (A3)
+    codes = {c.strip() for a, c in lines if not a and c and c.strip()}
+    if codes:
+        account_ids |= set(AccountInfo.objects.filter(
+            entity_id=entity_id, xero_code__in=codes, xero_account_id__isnull=False, merged_into__isnull=True)
+            .exclude(status="ACTIVE").values_list("id", flat=True))
     copies = dict(XeroAccount.objects.filter(entity_id=entity_id, xero_org_id=org)
                   .values_list("xero_guid", "status"))
     out = []

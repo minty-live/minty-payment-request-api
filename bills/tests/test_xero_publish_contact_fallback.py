@@ -569,8 +569,11 @@ class TestASupplierMadeOfflineGoesToXeroFirst:
         bill = self._bill(fall_entity, fall_user, row)
         made = MagicMock(status_code=200)
         made.json.return_value = {"Contacts": [{"ContactID": "x-kee", "Name": "Kee Wah"}]}
+        nothing = MagicMock(status_code=200)
+        nothing.json.return_value = {"Contacts": []}  # Xero has no contact of the name (C1)
         with (
-            patch("bills.services.contact_service.requests.post", return_value=made),
+            patch("bills.services.contact_service.requests.get", return_value=nothing),
+            patch("bills.services.contact_service.requests.post", return_value=made) as mock_post,
             patch(_PUT_PATH, return_value=_xero_200()) as mock_put,
             patch(_UPLOAD_ATTACHMENTS_PATH),
             patch(_UPLOAD_BANKSLIPS_PATH),
@@ -579,6 +582,8 @@ class TestASupplierMadeOfflineGoesToXeroFirst:
 
         sent = mock_put.call_args[1]["json"]["Invoices"][0]["Contact"]["ContactID"]
         assert sent == "x-kee" and sent != str(row.id)
+        assert mock_post.call_args[1]["json"] == {"Contacts": [{"Name": "Kee Wah", "IsCustomer": False,
+                                                                "IsSupplier": True}]}
         row.refresh_from_db()
         assert (row.xero_contact_id, row.xero_org_id) == ("x-kee", FAKE_ORG_ID)
 
@@ -589,7 +594,10 @@ class TestASupplierMadeOfflineGoesToXeroFirst:
         bill = self._bill(fall_entity, fall_user, row)
         refused = MagicMock(status_code=400, text="bad")
         refused.json.return_value = {"Message": "The contact name Kee Wah is already assigned"}
+        nothing = MagicMock(status_code=200)
+        nothing.json.return_value = {"Contacts": []}
         with (
+            patch("bills.services.contact_service.requests.get", return_value=nothing),
             patch("bills.services.contact_service.requests.post", return_value=refused),
             patch(_PUT_PATH) as mock_put,
             pytest.raises(BillValidationError, match="Kee Wah"),

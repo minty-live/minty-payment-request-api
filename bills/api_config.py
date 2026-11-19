@@ -32,11 +32,15 @@ from bills.schemas import (
     EntityFunctionOut,
     ErrorOut,
     MessageOut,
+    XeroContactLinkIn,
+    XeroContactLinkOut,
+    XeroContactOut,
 )
 from core.exceptions import PermissionDeniedError
 from core.permissions import (
     check_edit_bill_settings,
     check_not_system_superuser,
+    check_publish_xero,
     is_bill_role,
     is_elevated,
 )
@@ -456,6 +460,66 @@ def create_entity_bill_contact(request, payload: EntityBillContactCreateIn):
         name=payload.name,
     )
     return 201, row
+
+
+@entity_bill_contacts_router.get(
+    "/xero/",
+    response={200: list[XeroContactOut], 403: ErrorOut},
+    summary="The company's Xero contacts a supplier archived there can be mapped to",
+)
+def list_xero_contacts(request):
+    """The contacts the company's Xero has (the stored active copies), A to Z - what a supplier
+    archived in Xero can be mapped to at publish (owner's decisions doc C4, 2026-11-19)."""
+    from minty_db.models import XeroContact
+
+    check_not_system_superuser(request, "publish bills")
+    check_publish_xero(request.entity_role)
+    entity = Entity.objects.get(id=request.entity_id)
+    rows = XeroContact.objects.filter(
+        entity_id=entity.id, xero_org_id=str(entity.xero_org_id or ""), status="ACTIVE"
+    ).order_by("name")
+    return [{"xero_contact_id": r.xero_guid, "name": r.name} for r in rows]
+
+
+@entity_bill_contacts_router.post(
+    "/{contact_id}/xero-link/",
+    response={200: XeroContactLinkOut, 403: ErrorOut, 404: ErrorOut, 422: ErrorOut},
+    summary="Map a supplier archived in Xero to another Xero contact now",
+)
+def link_xero_contact(request, contact_id: str, payload: XeroContactLinkIn):
+    """The supplier now uses that Xero contact (one of the company's active copies) - merged into
+    the supplier already holding it, if any (accounts-api's relink). Minty never restores anything
+    in Xero (C4)."""
+    import uuid as _uuid
+
+    from minty_db.models import XeroContact, XeroContactSync
+
+    from bills.services.contact_service import relink
+
+    check_not_system_superuser(request, "publish bills")
+    check_publish_xero(request.entity_role)
+    entity = Entity.objects.get(id=request.entity_id)
+    try:
+        contact = XeroContactSync.objects.filter(
+            entity_id=entity.id, id=_uuid.UUID(contact_id), record_status="active"
+        ).first()
+    except ValueError:
+        contact = None
+    if contact is None:
+        return 404, {"detail": "That supplier isn't in this company. Reload the page and try again."}
+    copy = XeroContact.objects.filter(
+        entity_id=entity.id, xero_org_id=str(entity.xero_org_id or ""), xero_guid=payload.xero_contact_id,
+        status="ACTIVE",
+    ).first()
+    if copy is None:
+        return 422, {"detail": "Choose one of your Xero contacts to use."}
+    answer = relink(str(entity.id), contact.id, copy.xero_guid, "user", request.auth_user.id)
+    said = (
+        f"{contact.name} merged into the supplier that already uses {copy.name}."
+        if answer.get("merged")
+        else f"{contact.name} now uses {copy.name} in Xero."
+    )
+    return 200, {"message": said, "contact_id": answer.get("contact_id") or str(contact.id)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

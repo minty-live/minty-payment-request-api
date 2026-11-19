@@ -19,8 +19,10 @@ from bills.schemas import (
     BillListOut,
     BillOut,
     BillUpdateIn,
+    DuplicateBillsOut,
     ErrorOut,
     MessageOut,
+    PublishRefusedOut,
     ReturnBillIn,
     SuggestedReferenceOut,
 )
@@ -128,7 +130,7 @@ bills_router = Router()
 
 
 @bills_router.post(
-    "/", response={201: BillOut, 422: ErrorOut}, summary="Create a new bill"
+    "/", response={201: BillOut, 409: DuplicateBillsOut, 422: ErrorOut}, summary="Create a new bill"
 )
 def create_bill_endpoint(request, payload: BillCreateIn):
     check_not_system_superuser(request, "create bills")
@@ -139,7 +141,7 @@ def create_bill_endpoint(request, payload: BillCreateIn):
 
 @bills_router.post(
     "/submit/",
-    response={201: BillOut, 422: ErrorOut},
+    response={201: BillOut, 409: DuplicateBillsOut, 422: ErrorOut},
     summary="Create and submit a bill (with validation)",
 )
 def submit_bill_endpoint(request, payload: BillCreateIn):
@@ -151,7 +153,7 @@ def submit_bill_endpoint(request, payload: BillCreateIn):
 
 @bills_router.post(
     "/draft/",
-    response={201: BillOut, 422: ErrorOut},
+    response={201: BillOut, 409: DuplicateBillsOut, 422: ErrorOut},
     summary="Save a new bill as draft (no validation)",
 )
 def save_draft_endpoint(request, payload: BillDraftIn):
@@ -217,7 +219,7 @@ def export_bills_csv(request, payload: BillExportIn):
 
 @bills_router.put(
     "/{bill_id}/draft",
-    response={200: BillOut, 404: ErrorOut, 422: ErrorOut},
+    response={200: BillOut, 404: ErrorOut, 409: DuplicateBillsOut, 422: ErrorOut},
     summary="Update an existing bill as draft (no validation)",
 )
 def update_draft_endpoint(request, bill_id: str, payload: BillDraftIn):
@@ -366,7 +368,7 @@ def get_bill(request, bill_id: str):
 
 @bills_router.put(
     "/{bill_id}",
-    response={200: BillOut, 404: ErrorOut, 422: ErrorOut},
+    response={200: BillOut, 404: ErrorOut, 409: DuplicateBillsOut, 422: ErrorOut},
     summary="Update a bill (response includes payment-synced status and amount_due—merge into UI state or refetch GET detail)",
 )
 def update_bill_endpoint(request, bill_id: str, payload: BillUpdateIn):
@@ -468,7 +470,7 @@ def return_bill(request, bill_id: str, payload: ReturnBillIn):
 
 @bills_router.post(
     "/{bill_id}/publish/",
-    response={200: BillOut, 404: ErrorOut, 422: ErrorOut},
+    response={200: BillOut, 404: ErrorOut, 409: PublishRefusedOut, 422: ErrorOut},
     summary="Publish a bill to Xero",
 )
 def publish_bill_endpoint(request, bill_id: str):
@@ -486,6 +488,14 @@ def publish_bill_endpoint(request, bill_id: str):
         request.entity_id,
         str(request.auth_user.id),
     )
+    # A supplier Xero archived (owner's decisions doc C4, 2026-11-19): one Xero merged follows it;
+    # one archived with no merge is asked about - restored in Xero, or mapped now. Nothing is sent.
+    if access_token:
+        from bills.services.contact_service import ARCHIVED_IN_XERO, archived_bill_contact
+
+        archived = archived_bill_contact(Entity.objects.get(id=request.entity_id), bill, access_token)
+        if archived:
+            return 409, {"detail": ARCHIVED_IN_XERO.format(name=archived["name"]), "archived_contacts": [archived]}
     result = publish_bill_to_xero(
         bill_id=bill_id,
         entity_id=request.entity_id,

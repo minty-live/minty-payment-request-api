@@ -152,11 +152,18 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
 
     # Heal missing xero_contact_id before building any payload
     if not bill.xero_contact_id:
-        sync_row = (
-            XeroContactSync.objects.filter(entity_id=bill.entity_id)
-            .filter(xero_org_scope(xero_org_id))
-            .filter(name__iexact=bill.contact)
-            .first()
+        # the same name rule as everywhere (case and extra spaces ignored)
+        from bills.services.contact_service import _key
+
+        sync_row = next(
+            (
+                row
+                for row in XeroContactSync.objects.filter(entity_id=bill.entity_id).filter(
+                    xero_org_scope(xero_org_id)
+                )
+                if row.xero_contact_id and _key(row.name) == _key(bill.contact)
+            ),
+            None,
         )
         if sync_row and sync_row.xero_contact_id:
             bill.xero_contact_id = sync_row.xero_contact_id  # resolves to contact_id

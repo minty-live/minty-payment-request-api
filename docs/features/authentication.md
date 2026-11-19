@@ -14,13 +14,31 @@ a hash prefix of the key, never the key). The claims Minty puts in
 (`_generate_module_token`): `user_id`, `entity_id`, `xero_org_id`, `role`, `system_role`,
 `module`, `sid`, `billing_enabled`, `petty_cash_enabled`, `iat`, `exp` (30 minutes).
 
+**The sign-in behind it (Phase 9, owner's S1-S2, 2026-11-19).** After the user is loaded,
+`minty_shared.tokens.session_alive(sid, ACCOUNTS_API_URL, SECRET_KEY)` asks minty-accounts-api
+(`POST /api/internal/session/touch`, at most once a minute per `sid` per process) whether the
+Minty sign-in still lives - the ask keeps it alive, so every call here is activity. Signed out
+of Minty, or 60 minutes without activity: 401, and the web hands the person over again on the
+same page. A token with no `sid` (minted before Phase 9) passes until it expires; accounts-api
+unreachable is logged at ERROR and the token honoured. There is **no token refresh** any more:
+the 8-hour `POST /api/auth/token/refresh` (and `BILLING_TOKEN_HOURS`) is gone (404), so
+Payment Request signs out when Minty does. minty-accounts-api's authentication.md section 3.3
+is the whole design.
+
+**"Your session has expired" (owner, 2026-11-19).** When the sign-in has ENDED - the token still
+valid, or run out too (`minty_shared.tokens.session_ended`: signature good, expiry ignored, its
+`sid`'s sign-in gone) - the 401 is `{"detail": "Unauthorized", "reason": "session_expired"}`
+(`core/exceptions.py`'s `AuthenticationError` handler; ninja's own body otherwise, unchanged), and
+the web says the session has expired and sends the person to sign in instead of handing over
+quietly. Any other 401 carries no reason (`bills/tests/test_session_end.py`).
+
 For each request the class:
 1. decodes the token and loads the `user` row (an unknown user is a 401);
 2. resolves the **entity**: the `X-Entity-Id` header first, else the token's `entity_id`;
    with neither, the request is *unscoped* — authenticated as a person with no role
    (`_attach_unscoped`), which only the endpoints that opt into `SelfBearerAuth`
    (`require_entity_role = False`) accept: `/api/profile/*` and the person-level `/api/auth/*`
-   ones (`/entitlements`, `/token/refresh` - not `/xero-status`, which is the company's);
+   ones (`/entitlements` - not `/xero-status`, which is the company's);
 3. reads the person's **role on that entity from the database** (`user_entity.role`, an
    **approved** row only since 2026-11-12, as every other API - an unapproved one is no role) —
    never from the claim — and attaches `request.auth_user`, `request.entity_id`,
@@ -41,7 +59,6 @@ A system superuser (`system_role = superadmin`) with no row on the entity gets a
 | Endpoint | What |
 |---|---|
 | `GET /session` | the role and entity of the current token, from the DB |
-| `POST /token/refresh` | re-mints the billing JWT (8 hours, `BILLING_TOKEN_HOURS`) from a still-valid one — the frontend's cookie lives 8 hours too. `system_role` (`superadmin` or "") and `is_view_only` are re-derived from the request, `sid` is carried over (2026-10-20; they used to be dropped, so a non-member super admin saw write controls the API then refused) |
 | `GET /entitlements` | `petty_cash_enabled` / `billing_enabled` read **live** from `entity_function_map` (`core/entitlements.py`) — the JWT's claims are hints only |
 | `GET /xero-status` | whether the **company** is live on Xero (`xero_connection_live`, database only): a Xero org linked, `status` not `disconnected`, and a refresh token on the connector (`connected_by_user_id`) or the caller. `BearerAuth` - a role on the entity is required (2026-10-06; it used to read the person's own `user.refresh_token`, a column that had moved to `user_token`, swallowed the error and always said `false`) |
 | `GET /entity-currency` | the entity's ISO currency code and its decimal places |
@@ -99,7 +116,7 @@ would make it a second refresher and brick the connection.
 ## Tests
 
 `bills/tests/test_bill_permissions.py`, `test_superuser_cross_entity.py`,
-`test_token_refresh.py`, `test_billing_token_lifetime.py`, `test_logout.py`,
+`test_session_end.py` (the sign-in's end is a 401, no refresh route), `test_logout.py`,
 `test_xero_token_service.py`; the frontend's
 `e2e/01_handoff.spec.ts` proves the database entitlement, not the claim, decides what
 shows.

@@ -1,6 +1,24 @@
 {
   "components": {
     "schemas": {
+      "ArchivedContactOut": {
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "ArchivedContactOut",
+        "type": "object"
+      },
       "AttachmentOut": {
         "properties": {
           "created_at": {
@@ -199,6 +217,11 @@
             "default": "0",
             "title": "Amount"
           },
+          "confirm_duplicate": {
+            "default": false,
+            "title": "Confirm Duplicate",
+            "type": "boolean"
+          },
           "contact": {
             "default": "",
             "title": "Contact",
@@ -295,6 +318,11 @@
               }
             ],
             "title": "Amount"
+          },
+          "confirm_duplicate": {
+            "default": false,
+            "title": "Confirm Duplicate",
+            "type": "boolean"
           },
           "contact": {
             "anyOf": [
@@ -843,6 +871,11 @@
             ],
             "title": "Amount"
           },
+          "confirm_duplicate": {
+            "default": false,
+            "title": "Confirm Duplicate",
+            "type": "boolean"
+          },
           "contact": {
             "anyOf": [
               {
@@ -1137,6 +1170,70 @@
           }
         },
         "title": "CurrencyInfoUpdateIn",
+        "type": "object"
+      },
+      "DuplicateBillOut": {
+        "properties": {
+          "amount": {
+            "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+            "title": "Amount",
+            "type": "string"
+          },
+          "contact": {
+            "title": "Contact",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "invoice_date": {
+            "anyOf": [
+              {
+                "format": "date",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Invoice Date"
+          },
+          "reference": {
+            "title": "Reference",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "reference",
+          "contact",
+          "amount",
+          "invoice_date"
+        ],
+        "title": "DuplicateBillOut",
+        "type": "object"
+      },
+      "DuplicateBillsOut": {
+        "description": "A save asked about first: another bill has the same date, supplier and amount (DUP1).",
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "duplicates": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/DuplicateBillOut"
+            },
+            "title": "Duplicates",
+            "type": "array"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "DuplicateBillsOut",
         "type": "object"
       },
       "EntitlementsOut": {
@@ -2429,6 +2526,28 @@
         "title": "ProfileOut",
         "type": "object"
       },
+      "PublishRefusedOut": {
+        "description": "A publish refused because the supplier is archived in Xero (owner's decisions doc C4).",
+        "properties": {
+          "archived_contacts": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ArchivedContactOut"
+            },
+            "title": "Archived Contacts",
+            "type": "array"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "PublishRefusedOut",
+        "type": "object"
+      },
       "ReturnBillIn": {
         "properties": {
           "status": {
@@ -2453,24 +2572,6 @@
           "reference"
         ],
         "title": "SuggestedReferenceOut",
-        "type": "object"
-      },
-      "TokenRefreshOut": {
-        "properties": {
-          "expires_in": {
-            "title": "Expires In",
-            "type": "integer"
-          },
-          "token": {
-            "title": "Token",
-            "type": "string"
-          }
-        },
-        "required": [
-          "token",
-          "expires_in"
-        ],
-        "title": "TokenRefreshOut",
         "type": "object"
       },
       "XeroBillResponseLineOut": {
@@ -3057,6 +3158,55 @@
         "title": "XeroBillSyncPayloadOut",
         "type": "object"
       },
+      "XeroContactLinkIn": {
+        "properties": {
+          "xero_contact_id": {
+            "title": "Xero Contact Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "xero_contact_id"
+        ],
+        "title": "XeroContactLinkIn",
+        "type": "object"
+      },
+      "XeroContactLinkOut": {
+        "properties": {
+          "contact_id": {
+            "title": "Contact Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "message",
+          "contact_id"
+        ],
+        "title": "XeroContactLinkOut",
+        "type": "object"
+      },
+      "XeroContactOut": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "xero_contact_id": {
+            "title": "Xero Contact Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "xero_contact_id",
+          "name"
+        ],
+        "title": "XeroContactOut",
+        "type": "object"
+      },
       "XeroStatusOut": {
         "properties": {
           "connected": {
@@ -3201,29 +3351,6 @@
           }
         ],
         "summary": "Current billing session (entity role from DB)",
-        "tags": [
-          "Session"
-        ]
-      }
-    },
-    "/api/v1/auth/token/refresh": {
-      "post": {
-        "description": "Exchange a valid (non-expired) billing JWT for a fresh 8-hour token.\n\nThe caller must supply their current token in the Authorization header.\nExpired tokens are rejected \u2014 re-entry from Module 1 is required in that case.\n\nUses ``SelfBearerAuth`` for the same reason the person-level reads do: the frontend\nrefreshes pre-emptively before ANY call, so refusing a caller who holds no role on the\nentity in their token made every screen \u2014 including the ones that need no entity at\nall \u2014 report a timed-out session. The refreshed token is re-minted from\n``request.entity_id``/``entity_role``, so an unscoped context yields an unscoped\ntoken: narrower than the one presented, never wider.",
-        "operationId": "core_api_session_token_refresh",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TokenRefreshOut"
-                }
-              }
-            },
-            "description": "OK"
-          }
-        },
-        "summary": "Refresh the billing JWT before it expires",
         "tags": [
           "Session"
         ]
@@ -3478,6 +3605,16 @@
             },
             "description": "Created"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBillsOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3572,6 +3709,16 @@
               }
             },
             "description": "Created"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBillsOut"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -3779,6 +3926,16 @@
             },
             "description": "Created"
           },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBillsOut"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -3962,6 +4119,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBillsOut"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -4349,6 +4516,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DuplicateBillsOut"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -5097,6 +5274,16 @@
               }
             },
             "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublishRefusedOut"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -5955,6 +6142,126 @@
           }
         ],
         "summary": "Create a Xero contact and persist to xero_contact_sync",
+        "tags": [
+          "Entity Bill Contacts"
+        ]
+      }
+    },
+    "/api/v1/entity-bill-contacts/xero/": {
+      "get": {
+        "description": "The contacts the company's Xero has (the stored active copies), A to Z - what a supplier\narchived in Xero can be mapped to at publish (owner's decisions doc C4, 2026-11-19).",
+        "operationId": "bills_api_config_list_xero_contacts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/XeroContactOut"
+                  },
+                  "title": "Response",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Forbidden"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "The company's Xero contacts a supplier archived there can be mapped to",
+        "tags": [
+          "Entity Bill Contacts"
+        ]
+      }
+    },
+    "/api/v1/entity-bill-contacts/{contact_id}/xero-link/": {
+      "post": {
+        "description": "The supplier now uses that Xero contact (one of the company's active copies) - merged into\nthe supplier already holding it, if any (accounts-api's relink). Minty never restores anything\nin Xero (C4).",
+        "operationId": "bills_api_config_link_xero_contact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "contact_id",
+            "required": true,
+            "schema": {
+              "title": "Contact Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/XeroContactLinkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/XeroContactLinkOut"
+                }
+              }
+            },
+            "description": "OK"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorOut"
+                }
+              }
+            },
+            "description": "Unprocessable Content"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Map a supplier archived in Xero to another Xero contact now",
         "tags": [
           "Entity Bill Contacts"
         ]

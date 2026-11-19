@@ -68,8 +68,10 @@ and the insert, that row is the contact (`bills/tests/test_xero_unique_keys.py`)
 **Never blocked behind Xero, never a duplicate (owner, 2026-11-12).** `POST` returns the
 company's active supplier of that name when it has one (case and inner spaces ignored); with no
 live connection (not connected, or still keeping its books in Minty) the supplier is the company's
-own row, no Xero id; live, Xero's contact of that name is linked from the stored copies
-(`xero_contact`) before one is made (`xero_contact_for`). `GET` lists those Minty-only suppliers
+own row, no Xero id; live, Xero's contact of that name is linked - from the stored copies
+(`xero_contact`), then a live `GET /Contacts?searchTerm=` narrowed to the exact name (case and
+extra spaces ignored) - before one is made there as a supplier (`IsSupplier: true`;
+`xero_contact_for`; owner's decisions doc C5, 2026-11-19). `GET` lists those Minty-only suppliers
 beside the live ones, and leaves archived and merged rows out. **Publish puts a Minty-only supplier
 in Xero first** (`xero_publish_service`): it used to send the row's own id as the `ContactID`
 (`bill.xero_contact_id` falls back to it); now Xero's contact of the name is linked, else made,

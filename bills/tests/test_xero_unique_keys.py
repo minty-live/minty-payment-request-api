@@ -84,7 +84,11 @@ def test_a_contact_a_sync_stored_first_is_that_contact(
     monkeypatch.setattr(manager, "create", meets_the_key)
     fake_resp = MagicMock(status_code=200)
     fake_resp.json.return_value = {"Contacts": [{"ContactID": "new-cid-001", "Name": "Fresh Supplier Co"}]}
-    with patch("bills.services.contact_service.requests.post", return_value=fake_resp):
+    nothing = MagicMock(status_code=200)
+    nothing.json.return_value = {"Contacts": []}
+    with patch("bills.services.contact_service.requests.get", return_value=nothing), patch(
+        "bills.services.contact_service.requests.post", return_value=fake_resp
+    ):
         resp = api_client.post(
             "/api/v1/entity-bill-contacts/",
             data={"name": "Fresh Supplier Co"},

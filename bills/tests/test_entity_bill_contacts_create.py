@@ -8,6 +8,14 @@ from minty_db.models import XeroContactSync
 from bills.tests.conftest import give_xero_token
 
 
+def _search_answer(contacts):
+    """Xero's answer to ``GET /Contacts?searchTerm=``."""
+    answer = MagicMock()
+    answer.status_code = 200
+    answer.json.return_value = {"Contacts": contacts}
+    return answer
+
+
 @pytest.mark.django_db
 class TestEntityBillContactsCreate:
     def test_requires_bill_role(
@@ -130,6 +138,36 @@ class TestEntityBillContactsCreate:
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-kept"
         mock_post.assert_not_called()
 
+    def test_a_live_company_links_the_contact_xero_has_of_that_name_never_a_twin(
+        self,
+        db,
+        api_client,
+        auth_headers,
+        test_user,
+        test_entity,
+        test_user_entity,
+    ):
+        """C5: Xero searched live by name; only the exact name (case and extra spaces ignored) counts."""
+        test_entity.status = "connected"
+        test_entity.xero_org_id = "org-abc"
+        test_entity.save()
+        give_xero_token(test_user, "fake-xero-token")
+        found = [
+            {"ContactID": "cid-acme-hk", "Name": "Acme Ltd Hong Kong", "ContactStatus": "ACTIVE"},
+            {"ContactID": "cid-acme", "Name": "ACME  LTD", "ContactStatus": "ACTIVE"},
+        ]
+        with patch(
+            "bills.services.contact_service.requests.get", return_value=_search_answer(found)
+        ), patch("bills.services.contact_service.requests.post") as mock_post:
+            resp = api_client.post(
+                "/api/v1/entity-bill-contacts/",
+                data={"name": "Acme Ltd"},
+                content_type="application/json",
+                **auth_headers,
+            )
+        assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-acme"
+        mock_post.assert_not_called()
+
     def test_creates_contact_and_db_row(
         self,
         db,
@@ -153,6 +191,8 @@ class TestEntityBillContactsCreate:
         }
 
         with patch(
+            "bills.services.contact_service.requests.get", return_value=_search_answer([])
+        ) as mock_get, patch(
             "bills.services.contact_service.requests.post",
             return_value=fake_resp,
         ) as mock_post:
@@ -168,7 +208,12 @@ class TestEntityBillContactsCreate:
         assert body["xero_contact_id"] == "new-cid-001"
         assert body["name"] == "Fresh Supplier Co"
         assert body["entity_id"] == str(test_entity.id)
+        # owner's decisions doc C5 (2026-11-19): Xero searched for the name, then made as a supplier
+        assert mock_get.call_args[1]["params"]["searchTerm"] == "Fresh Supplier Co"
         mock_post.assert_called_once()
+        assert mock_post.call_args[1]["json"] == {
+            "Contacts": [{"Name": "Fresh Supplier Co", "IsCustomer": False, "IsSupplier": True}]
+        }
 
         row = XeroContactSync.objects.get(
             entity_id=test_entity.id,
@@ -198,6 +243,8 @@ class TestEntityBillContactsCreate:
         fake_resp.text = "bad"
 
         with patch(
+            "bills.services.contact_service.requests.get", return_value=_search_answer([])
+        ), patch(
             "bills.services.contact_service.requests.post",
             return_value=fake_resp,
         ):
@@ -214,8 +261,9 @@ class TestEntityBillContactsCreate:
 
 @pytest.mark.django_db
 class TestADeletedSupplierComesBack:
-    """Owner, 2026-11-12: a supplier the company deleted, added again, is that one brought back -
-    ACTIVE in Xero when it is there - never a second one."""
+    """Owner, 2026-11-12: a supplier the company deleted, added again, is that one brought back - never
+    a second one. Minty never restores anything in the customer's Xero (owner's decisions doc C4,
+    2026-11-19): if Xero still has it archived, publish asks."""
 
     def _connected(self, test_entity, test_user):
         test_entity.status = "connected"
@@ -228,7 +276,7 @@ class TestADeletedSupplierComesBack:
             "/api/v1/entity-bill-contacts/", data={"name": name}, content_type="application/json", **auth_headers
         )
 
-    def test_a_deleted_one_in_xero_is_active_again_there(
+    def test_a_deleted_one_comes_back_in_minty_and_nothing_is_restored_in_xero(
         self, api_client, auth_headers, test_user, test_entity, test_user_entity
     ):
         self._connected(test_entity, test_user)
@@ -236,16 +284,14 @@ class TestADeletedSupplierComesBack:
             entity_id=test_entity.id, name="Acme Ltd", xero_contact_id="cid-acme", xero_org_id="org-abc",
             record_status="archived",
         )
-        ok = MagicMock(status_code=200)
-        ok.json.return_value = {"Contacts": [{"ContactID": "cid-acme", "Name": "Acme Ltd"}]}
-        with patch("bills.services.contact_service.requests.post", return_value=ok) as mock_post:
+        with patch("bills.services.contact_service.requests.post") as mock_post:
             resp = self._add(api_client, auth_headers, "acme ltd")
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-acme"
-        assert mock_post.call_args[1]["json"] == {"Contacts": [{"ContactID": "cid-acme", "ContactStatus": "ACTIVE"}]}
+        mock_post.assert_not_called()
         gone.refresh_from_db()
         assert gone.record_status == "active"
 
-    def test_xeros_archived_contact_of_that_name_is_linked_again(
+    def test_xeros_archived_contact_of_that_name_is_linked_as_it_stands(
         self, api_client, auth_headers, test_user, test_entity, test_user_entity
     ):
         from minty_db.models import XeroContact
@@ -254,15 +300,13 @@ class TestADeletedSupplierComesBack:
         XeroContact.objects.create(
             entity_id=test_entity.id, xero_org_id="org-abc", xero_guid="cid-old", name="Acme Ltd", status="ARCHIVED"
         )
-        ok = MagicMock(status_code=200)
-        ok.json.return_value = {"Contacts": [{"ContactID": "cid-old", "Name": "Acme Ltd"}]}
-        with patch("bills.services.contact_service.requests.post", return_value=ok) as mock_post:
+        with patch("bills.services.contact_service.requests.post") as mock_post:
             resp = self._add(api_client, auth_headers, "Acme Ltd")
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-old"
-        assert mock_post.call_args[1]["json"] == {"Contacts": [{"ContactID": "cid-old", "ContactStatus": "ACTIVE"}]}
-        assert XeroContact.objects.get(xero_guid="cid-old").status == "ACTIVE"
+        mock_post.assert_not_called()
+        assert XeroContact.objects.get(xero_guid="cid-old").status == "ARCHIVED"
 
-    def test_offline_a_minty_one_comes_back_and_one_in_xero_waits(
+    def test_offline_both_come_back_with_no_xero_call(
         self, api_client, auth_headers, test_entity, test_user_entity
     ):
         test_entity.status = "disconnected"
@@ -275,5 +319,5 @@ class TestADeletedSupplierComesBack:
             back = self._add(api_client, auth_headers, "Acme Ltd")
             waits = self._add(api_client, auth_headers, "Sam's Fish")
         assert back.status_code == 201 and back.json()["xero_contact_id"] == str(own.id)
-        assert waits.status_code == 422 and "reconnect Xero to bring it back" in waits.json()["detail"]
+        assert waits.status_code == 201 and waits.json()["xero_contact_id"] == "cid-sam"
         mock_post.assert_not_called()

@@ -1,5 +1,7 @@
 import logging
 
+from minty_shared import tokens
+from ninja.errors import AuthenticationError
 from ninja.errors import ValidationError as SchemaValidationError
 
 logger = logging.getLogger("minty-api")
@@ -71,6 +73,15 @@ def validation_message(errors):
 
 
 def register_exception_handlers(api):
+    @api.exception_handler(AuthenticationError)
+    def on_unauthorized(request, exc):
+        """ninja's own 401 body (``{"detail": "Unauthorized"}``), plus ``"reason":
+        "session_expired"`` when the sign-in behind the token has ended (core/auth.py, owner
+        2026-11-19): the web then says the session has expired instead of handing over quietly."""
+        return api.create_response(
+            request, {"detail": "Unauthorized", **tokens.unauthorized_reason(request)}, status=401
+        )
+
     @api.exception_handler(SchemaValidationError)
     def on_schema_validation(request, exc):
         # The structured errors stay in the log; the body carries the sentence.
@@ -78,6 +89,13 @@ def register_exception_handlers(api):
         return api.create_response(
             request, {"detail": validation_message(exc.errors)}, status=422
         )
+
+    from bills.services.bill_service import DuplicateBill
+
+    @api.exception_handler(DuplicateBill)
+    def on_duplicate(request, exc):
+        # DUP1 (owner's decisions doc, 2026-11-19): asked, not refused - the app offers "save anyway"
+        return api.create_response(request, {"detail": str(exc), "duplicates": exc.found}, status=409)
 
     @api.exception_handler(BillValidationError)
     def on_validation(request, exc):

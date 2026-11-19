@@ -24,6 +24,47 @@ class ErrorOut(Schema):
     detail: str
 
 
+class DuplicateBillOut(Schema):
+    id: IdStr
+    reference: str
+    contact: str
+    amount: Decimal
+    invoice_date: date | None
+
+
+class DuplicateBillsOut(Schema):
+    """A save asked about first: another bill has the same date, supplier and amount (DUP1)."""
+
+    detail: str
+    duplicates: list[DuplicateBillOut] = []
+
+
+class ArchivedContactOut(Schema):
+    id: str
+    name: str
+
+
+class PublishRefusedOut(Schema):
+    """A publish refused because the supplier is archived in Xero (owner's decisions doc C4)."""
+
+    detail: str
+    archived_contacts: list[ArchivedContactOut] = []
+
+
+class XeroContactOut(Schema):
+    xero_contact_id: str
+    name: str
+
+
+class XeroContactLinkIn(Schema):
+    xero_contact_id: str
+
+
+class XeroContactLinkOut(Schema):
+    message: str
+    contact_id: str
+
+
 class SuggestedReferenceOut(Schema):
     reference: str
 
@@ -110,6 +151,8 @@ class BillCreateIn(Schema):
     currency_code: str = ""  # ignored: the server uses the entity's currency
     xero_account_code: str = ""
     line_items: list[LineItemIn] = []
+    # DUP1 (owner's decisions doc, 2026-11-19): save it though it repeats another bill
+    confirm_duplicate: bool = False
     # how an AI-read amount in another currency was converted - the six fx.COLUMNS, checked
     # against the amount (owner, 2026-11-19); absent = none
     exchange: dict[str, str] | None = None
@@ -126,6 +169,8 @@ class BillDraftIn(Schema):
     currency_code: str | None = None  # ignored: the server uses the entity's currency
     xero_account_code: str | None = None
     line_items: list[LineItemIn] | None = None
+    # DUP1 (owner's decisions doc, 2026-11-19): save it though it repeats another bill
+    confirm_duplicate: bool = False
     # a converted amount's six details; absent with a changed amount clears the bill's
     exchange: dict[str, str] | None = None
 
@@ -146,6 +191,8 @@ class BillUpdateIn(Schema):
     currency_code: str | None = None  # ignored: the server uses the entity's currency
     xero_account_code: str | None = None
     line_items: list[LineItemIn] | None = None
+    # DUP1 (owner's decisions doc, 2026-11-19): save it though it repeats another bill
+    confirm_duplicate: bool = False
     # a converted amount's six details; absent with a changed amount clears the bill's
     exchange: dict[str, str] | None = None
 

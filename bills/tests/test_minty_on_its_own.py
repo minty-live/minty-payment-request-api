@@ -200,8 +200,9 @@ def test_a_line_on_an_account_archived_in_xero_is_refused_by_name(api_client, au
 
     resp = _publish(api_client, auth_headers, draft_bill)
 
-    assert (resp.status_code, resp.json()) == (422, {"detail": "Rent (469) is archived in Xero. Restore it in Xero "
-                                                               "or choose another account, then publish again."})
+    assert (resp.status_code, resp.json()) == (422, {"detail": "Rent (469) is archived in Xero. Please check it in "
+                                                               "Xero, then map this account to the one you want to use "
+                                                               "(Settings, under General), and publish again."})
 
 
 class _Answer:
@@ -230,7 +231,8 @@ def test_an_account_xero_still_archives_is_asked_about_and_refused(test_entity, 
     answer = _Answer(200, {"Accounts": [{"AccountID": "g-469", "Status": "ARCHIVED"}]})
     with patch("bills.services.books.requests.get", return_value=answer) as asked:
         refusal = books.publish_refusal(test_entity.id, draft_bill, token=lambda: "tok")
-    assert refusal == "Rent (469) is archived in Xero. Restore it in Xero or choose another account, then publish again."
+    assert refusal == ("Rent (469) is archived in Xero. Please check it in Xero, then map this account to the one you "
+                       "want to use (Settings, under General), and publish again.")
     assert asked.call_args.args[0].endswith("/Accounts/g-469")
     assert asked.call_args.kwargs["headers"]["Xero-Tenant-Id"] == "org-1"
 
@@ -295,3 +297,22 @@ def test_a_change_of_matches_in_progress_does_not_hold_a_publish(test_entity, dr
     Entity.objects.filter(id=test_entity.id).update(xero_matching="change")
     assert books.publish_refusal(test_entity.id, draft_bill) is None
 
+
+
+@pytest.mark.django_db
+def test_a_line_saved_by_code_after_its_account_left_xero_is_held_too(test_entity, draft_bill):
+    """A3 (2026-11-19): a line saved while its account was already gone from Xero has only the code
+    (``BillLine.save`` picks active accounts) - the publish is still held."""
+    from minty_db.models import XeroAccount
+
+    _connected(test_entity)
+    _copy(test_entity, "g-469")
+    XeroAccount.objects.filter(entity_id=test_entity.id, xero_guid="g-469").update(status="DELETED")
+    rent = _account(test_entity, "469", "Rent", xero_id="g-469")
+    AccountInfo.objects.filter(id=rent.id).update(status="ARCHIVED")  # before: the line can't take it
+    line = BillLine.objects.create(bill=draft_bill, description="May rent", account_code="469", line_amount=100)
+    assert line.account_id is None
+    answer = _Answer(200, {"Accounts": [{"AccountID": "g-469", "Status": "ARCHIVED"}]})
+    with patch("bills.services.books.requests.get", return_value=answer):
+        refusal = books.publish_refusal(test_entity.id, draft_bill, token=lambda: "tok")
+    assert refusal and refusal.startswith("Rent (469) is archived in Xero. Please check it in Xero")

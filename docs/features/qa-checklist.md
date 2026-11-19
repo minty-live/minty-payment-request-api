@@ -22,7 +22,7 @@ endpoint needs a real `user_entity` row before it answers anything.
 - [ ] `X-Entity-Id` header resolves the entity ahead of the token's own `entity_id` when
       both are present.
 - [ ] No entity resolvable at all (no header, no token `entity_id`) → unscoped identity;
-      only `/api/profile/*` and `/api/auth/entitlements` / `/api/auth/token/refresh` accept
+      only `/api/profile/*` and `/api/auth/entitlements` accept
       it — every other endpoint, including `/api/auth/xero-status`, refuses it.
 - [ ] `GET /api/auth/xero-status` answers from the database, not a stale claim (regression
       check: since 2026-10-06 it reads the connector's live refresh-token row; it used to
@@ -48,9 +48,9 @@ endpoint needs a real `user_entity` row before it answers anything.
 ## Session endpoints (`/api/auth/*`)
 
 - [ ] `GET /session` returns the role and entity read from the DB for the current token.
-- [ ] `POST /token/refresh` re-mints an 8-hour billing JWT from a still-valid one
-      (`BILLING_TOKEN_HOURS`), keeping `system_role`, `is_view_only` (super admin on a company
-      they are not a member of) and `sid`.
+- [ ] `POST /token/refresh` is gone (404, Phase 9): there is no 8-hour refresh.
+- [ ] Sign out of Minty (or leave it 60 minutes): the next call with the old token is 401 -
+      at most a minute later, the per-process check interval.
 - [ ] `GET /entitlements` reflects `entity_function_map` live — toggle a module in the DB
       and confirm the answer changes without minting a new token.
 - [ ] `GET /entity-currency` returns the entity's ISO currency code and `decimal_places` ("" and 2

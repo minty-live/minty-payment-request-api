@@ -237,6 +237,38 @@ class TestXeroLivePathMergeNoDuplicates:
         )
         _assert_no_duplicate_contact_ids(contacts, "overlap: xero + db")
 
+    def test_a_contact_minty_archived_or_merged_is_never_offered_from_xeros_live_list(
+        self,
+        connected_entity,
+        user_with_token,
+        test_user_entity,
+    ):
+        """One contact list (owner's decisions doc C3, M1, 2026-11-19): a contact Minty deleted or
+        merged away can't be picked for new records, even though Xero still lists it."""
+        kept = XeroContactSync.objects.create(
+            id=_uid("kept"), entity_id=connected_entity.id, xero_contact_id="xero-kept", xero_org_id="org-abc",
+            name="Kee Wah",
+        )
+        XeroContactSync.objects.create(
+            id=_uid("merged"), entity_id=connected_entity.id, xero_contact_id="xero-merged",
+            xero_org_id="org-abc", name="Kee Wah Bakery", record_status="archived", merged_into_id=kept.id,
+        )
+        XeroContactSync.objects.create(
+            id=_uid("deleted"), entity_id=connected_entity.id, xero_contact_id="xero-deleted",
+            xero_org_id="org-abc", name="Old Supplier", record_status="archived",
+        )
+        xero_contacts = [
+            {"ContactID": "xero-kept", "Name": "Kee Wah"},
+            {"ContactID": "xero-merged", "Name": "Kee Wah Bakery"},
+            {"ContactID": "xero-deleted", "Name": "Old Supplier"},
+        ]
+        with patch(
+            "bills.services.contact_service.requests.get",
+            return_value=_make_xero_resp(xero_contacts),
+        ):
+            contacts = get_entity_bill_contacts(entity_id=connected_entity.id, jwt_user_id=user_with_token.id)
+        assert [c["name"] for c in contacts] == ["Kee Wah"]
+
     def test_all_xero_contacts_also_in_db_no_duplicates(
         self,
         connected_entity,

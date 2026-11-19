@@ -21,7 +21,9 @@ token side in [authentication.md](authentication.md).
    the new org (`_reset_for_new_org`) and published afresh. Otherwise a second publish
    into the same org would duplicate the invoice.
 3. **Contact heal** — a bill saved without `xero_contact_id` gets it from the cached
-   contact with the same name; missing in Xero → the contact is created.
+   contact with the same name (case and extra spaces ignored); a Minty-only supplier is found in
+   Xero by name or made there as a supplier first (`xero_contact_for`, owner's decisions doc C1,
+   2026-11-19).
 4. **Lock dates** — `fetch_lock_dates` reads the organisation's period and end-of-year
    locks; a bill dated on or before either is sent as `DRAFT` (Xero refuses to AUTHORISE
    into a locked period), otherwise `AUTHORISED`.
@@ -58,3 +60,29 @@ in Xero and caches it.
 `test_xero_publish_contact_fallback.py`, `test_xero_publish_bankslip.py`,
 `test_xero_token_service.py`, `test_contact_*.py`; for real, against a Demo Company,
 `minty-payment-request-web/e2e/04_xero_publish.spec.ts` with `E2E_XERO=1`.
+
+## A supplier archived in Xero; an account gone from Xero (the owner's decisions doc C4, A3, 2026-11-19)
+
+- Before the publish (`bills/api.py`, `contact_service.archived_bill_contact`), the bill's supplier when
+  linked to Xero is asked of Xero: merged in Xero -> relinked through accounts-api (no prompt); archived with
+  no merge -> 409 `{detail: "<Name> is archived in Xero. Restore it in Xero, or map it to another contact
+  now.", archived_contacts: [{id, name}]}` (`PublishRefusedOut`), nothing sent. Minty never restores a
+  contact in Xero ("+ Add" brings a deleted one back in Minty only).
+- "Map it now": `GET /api/v1/entity-bill-contacts/xero/` and
+  `POST /api/v1/entity-bill-contacts/{id}/xero-link/ {xero_contact_id}` (`check_publish_xero`).
+- A3: `books.stale_matches` uses the doc's sentence, and a line saved by code alone after its account left
+  Xero (no `account_id`) is held too.
+- One contact list (C3): the picker's live Xero list leaves out a contact Minty deleted or merged away
+  (`get_entity_bill_contacts`); Minty-made suppliers are appended as before.
+- Tests: `bills/tests/test_archived_contact.py`, `test_minty_on_its_own.py`, `test_entity_bill_contacts_create.py`,
+  `test_contact_no_duplicates.py`.
+
+## The duplicate reminder (the owner's decisions doc DUP1, 2026-11-19)
+
+Every bill save - `POST /bills/`, `/bills/submit/`, `/bills/draft/`, `PUT /bills/{id}/draft`, `PUT /bills/{id}` -
+looks for another bill (not voided, not itself) with the same date (`invoice_date`), supplier and exactly
+the same amount, once all three are filled in (`bill_service.ask_about_duplicates`). Found: 409
+`{detail: "This looks like a bill you already have: the same date, supplier and amount. Save it anyway?",
+duplicates: [...]}` (`DuplicateBillsOut`, `core/exceptions.py`), nothing saved; the same body with
+`"confirm_duplicate": true` saves it. It never blocks. The invoice-number refusal is unchanged.
+Tests: `bills/tests/test_duplicate_reminder.py`.

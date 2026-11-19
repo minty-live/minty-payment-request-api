@@ -205,6 +205,7 @@ def _exchange_change(bill: Bill, data) -> dict | None:
 
 
 def save_bill_draft(data, user_id: str, entity_id: str) -> Bill:
+    ask_about_duplicates(entity_id, data)
     currency_code = require_entity_currency_code(entity_id)
     exchange = _exchange(data, entity_id, data.amount)
     ref = _final_reference_for_create(
@@ -261,9 +262,67 @@ def _one_line_follows_description(bill: Bill, data) -> None:
         lines[0].save(update_fields=["description"])
 
 
+#: DUP1 (the owner's decisions doc, 2026-11-19): asked before a save; "save anyway" always saves.
+DUPLICATE_BILL = "This looks like a bill you already have: the same date, supplier and amount. Save it anyway?"
+
+
+class DuplicateBill(Exception):
+    """A save that repeats another bill - answered 409 with the ``found`` bills (``core.exceptions``)."""
+
+    def __init__(self, found: list[dict]):
+        super().__init__(DUPLICATE_BILL)
+        self.found = found
+
+
+def _contact_row_id(entity_id, value):
+    """The supplier row a bill names (its Xero id, else - a supplier made in Minty - its own id)."""
+    import uuid as _uuid
+
+    from minty_db.models import XeroContactSync
+
+    value = (value or "").strip()
+    if not value:
+        return None
+    row = XeroContactSync.objects.filter(entity_id=entity_id, xero_contact_id=value).values_list("id", flat=True)
+    if row.exists():
+        return row.first()
+    try:
+        _uuid.UUID(value)
+    except ValueError:
+        return None
+    return XeroContactSync.objects.filter(entity_id=entity_id, id=value).values_list("id", flat=True).first()
+
+
+def ask_about_duplicates(entity_id, data, bill: Bill | None = None) -> None:
+    """DUP1: another bill (not voided, not this one) with the same date, supplier and exactly the same
+    amount is asked about before the save - only once all three are filled in, so a draft saved half
+    done never is. ``confirm_duplicate`` saves it anyway."""
+    if getattr(data, "confirm_duplicate", False):
+        return
+    if bill is not None and all(getattr(data, f, None) is None for f in ("xero_contact_id", "invoice_date", "amount")):
+        return  # a change that touches none of the three (a status, a description) is never asked about
+    pick = getattr(data, "xero_contact_id", None)
+    contact_id = _contact_row_id(entity_id, pick) if pick else (bill.contact_id if bill else None)
+    invoice_date = getattr(data, "invoice_date", None) or (bill.invoice_date if bill else None)
+    amount = getattr(data, "amount", None)
+    if amount is None and bill is not None:
+        amount = bill.amount
+    if not (contact_id and invoice_date and amount):
+        return
+    rows = Bill.objects.filter(entity_id=entity_id, contact_id=contact_id, invoice_date=invoice_date,
+                               amount=amount).exclude(status=Bill.Status.VOIDED)
+    if bill is not None:
+        rows = rows.exclude(id=bill.id)
+    found = [{"id": str(b.id), "reference": b.reference or "", "contact": b.contact or "", "amount": b.amount,
+              "invoice_date": b.invoice_date} for b in rows.order_by("created_at")[:5]]
+    if found:
+        raise DuplicateBill(found)
+
+
 def update_bill_draft(bill: Bill, data, user_id: str) -> Bill:
     if bill.status == Bill.Status.VOIDED:
         raise BillValidationError("You can't edit a voided bill.")
+    ask_about_duplicates(bill.entity_id, data, bill)
     draft_fields = (
         "contact",
         "xero_contact_id",
@@ -325,6 +384,7 @@ def update_bill_draft(bill: Bill, data, user_id: str) -> Bill:
 
 
 def create_bill(data, user_id: str, entity_id: str) -> Bill:
+    ask_about_duplicates(entity_id, data)
     currency_code = require_entity_currency_code(entity_id)
     exchange = _exchange(data, entity_id, data.amount)
     ref = _final_reference_for_create(
@@ -368,6 +428,7 @@ def create_bill(data, user_id: str, entity_id: str) -> Bill:
 
 def submit_bill(data, user_id: str, entity_id: str) -> Bill:
     validate_for_submission(data)
+    ask_about_duplicates(entity_id, data)
     currency_code = require_entity_currency_code(entity_id)
     exchange = _exchange(data, entity_id, data.amount)
     ref = _final_reference_for_create(
@@ -425,6 +486,7 @@ def update_bill(bill: Bill, data, user_id: str) -> Bill:
     )
     if getattr(data, "status", None) == "submitted" and bill.status != "submitted":
         validate_for_submission(data, bill=bill)
+    ask_about_duplicates(bill.entity_id, data, bill)
 
     if getattr(
         data, "reference", None
