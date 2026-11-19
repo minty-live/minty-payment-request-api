@@ -45,6 +45,7 @@ CONFIG = ai.ReaderConfig("BILL_AI")
 _MAX_AMOUNT = Decimal("10000000")
 _MAX_FOREIGN_AMOUNT = Decimal("999999999999")
 _MAX_DESCRIPTION = 200
+_MAX_DATE_RAW = 40
 
 
 class InvoiceSuggestion(BaseModel):
@@ -66,6 +67,8 @@ class InvoiceSuggestion(BaseModel):
 
     invoice_date: str = Field(default="", description="ISO 8601 date, or empty")
     invoice_date_confidence: float = 0.0
+    # the issue date as printed (owner's prompt update, 2026-11-19)
+    invoice_date_raw: str = ""
 
     due_date: str = Field(default="", description="ISO 8601 date, or empty")
     due_date_confidence: float = 0.0
@@ -108,6 +111,9 @@ INSTRUCTION = (
     "terms are printed (such as 'Net 30' or '30 days'), add them to invoice_date. If neither is "
     "printed, return the empty string.\n"
     "- currency is the ISO 4217 code of the invoice's amounts.\n"
+    "- invoice_date_raw is the issue date exactly as printed on the invoice, character for "
+    "character. Do not reformat it.\n"
+    "- If only '$' is printed, infer the currency from the issuer's country.\n"
     "- Answer only with the JSON object described by the response schema."
 )
 CLOSING = "Extract the fields for this invoice."
@@ -244,6 +250,8 @@ def validate(parsed: InvoiceSuggestion, context: dict) -> dict:
         "due_date": ai.field(due_date, parsed.due_date_confidence if due_date else 0, CONFIG),
         "currency": currency,
         "entity_currency": context["entity"]["currency"],
+        # the issue date as printed: untrusted text, handed on and never logged
+        "invoice_date_raw": (parsed.invoice_date_raw or "").strip()[:_MAX_DATE_RAW],
     }
 
 

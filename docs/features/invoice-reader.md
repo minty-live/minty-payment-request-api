@@ -47,6 +47,13 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
   `minty_shared.model_input` makes the small copy the model reads (an image capped at 2048 px and
   saved once as JPEG; a PDF's first page). The stored attachment is never changed.
 
+## The prompt update (owner, 2026-11-19)
+
+Two rules join the instruction, before its last line: `invoice_date_raw` - the issue date exactly as
+printed, character for character, never reformatted (handed on in the answer as untrusted text,
+stripped and capped at 40, never logged; no screen uses it yet) - and, when only "$" is printed, the
+currency inferred from the issuer's country.
+
 ## An invoice in another currency (owner, 2026-11-19)
 
 When the invoice's currency is not the company's, the amount comes back **converted** at

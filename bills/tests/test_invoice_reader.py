@@ -414,3 +414,30 @@ def test_no_policy_turns_reading_off(api_client, auth_headers, model):
 
     assert api_client.get(STATUS_URL, **auth_headers).json() == {"enabled": False}
     assert _extract(api_client, auth_headers).json()["reason"] == "not_configured"
+
+
+# --- the owner's prompt update (2026-11-19): the raw issue date, currency from '$' ----------------
+
+LAST_LINE = "- Answer only with the JSON object described by the response schema."
+
+
+def test_the_instruction_adds_the_raw_date_and_currency_rules_before_its_last_line():
+    instruction = invoice_reader.INSTRUCTION
+    for rule in (
+        "- invoice_date_raw is the issue date exactly as printed on the invoice, character for "
+        "character. Do not reformat it.\n",
+        "- If only '$' is printed, infer the currency from the issuer's country.\n",
+    ):
+        assert rule in instruction
+        assert instruction.index(rule) < instruction.index(LAST_LINE)
+    assert "- currency is the ISO 4217 code of the invoice's amounts.\n" in instruction
+    assert instruction.endswith(LAST_LINE)
+    assert invoice_reader.InvoiceSuggestion.model_fields["invoice_date_raw"].default == ""
+
+
+@pytest.mark.usefixtures("test_user_entity", "lists")
+def test_the_raw_issue_date_is_handed_on_as_printed_and_capped(api_client, auth_headers, model):
+    s, _ = _read(api_client, auth_headers, model, invoice_date_raw="  20 Oct, 2026 ")
+    assert s["invoice_date_raw"] == "20 Oct, 2026"
+    s, _ = _read(api_client, auth_headers, model, invoice_date_raw="x" * 500)
+    assert len(s["invoice_date_raw"]) == 40
