@@ -164,15 +164,17 @@ def save_draft_endpoint(request, payload: BillDraftIn):
 @bills_router.get(
     "/extract/status/",
     response={200: dict, 403: ErrorOut},
-    summary="Whether the invoice reader is switched on",
+    summary="Whether the invoice reader is switched on, and the company's AI reads left",
 )
 def extract_status_endpoint(request):
-    """``{"enabled": bool}`` - the new-bill form offers "Read the invoice" only when
-    ``BILL_AI_ENABLED`` is on; the invoice is read only on that press (owner, 2026-11-18). Asked by
-    the same people as ``POST /extract/``."""
+    """``{"enabled": bool, reads_used, reads_limit, reads_left, blocked, resumes_at}`` - the new-bill
+    form offers "Read with AI" only when ``BILL_AI_ENABLED`` is on and ``ai_policy`` is usable; the
+    invoice is read only on that press, and the company's reads are shared with Petty Cash (owner,
+    2026-11-18). A switched-off reader sends ``{"enabled": false}`` alone. Asked by the same people
+    as ``POST /extract/``."""
     check_not_system_superuser(request, "read invoices")
     check_create_bill(request.entity_role)
-    return {"enabled": invoice_reader.CONFIG.enabled()}
+    return invoice_reader.reader_status(request.entity_id)
 
 
 @bills_router.post(
@@ -184,9 +186,10 @@ def extract_invoice_endpoint(request, invoice: list[UploadedFile] = File(None)):
     """Multipart ``invoice`` -> the model's suggestions for the new-bill form
     (``services/invoice_reader.py``, on the engine shared with Petty Cash's receipt reader). Who
     may ask (403) and the file (one PDF / JPEG / PNG of at most 10 MB, by its bytes; 422) are
-    refused; past those every outcome is 200 ``{suggestions, reason}`` - switched off, rate
-    limited, too large, no accounts or suppliers, or any failure of the model is ``suggestions:
-    null`` with a reason. Nothing is written."""
+    refused; past those every outcome is 200 ``{suggestions, reason, reader}`` - switched off, the
+    company's AI reads used up (``limit_reached``), too large, no accounts or suppliers, or any
+    failure of the model is ``suggestions: null`` with a reason; ``reader`` is the allowance after
+    the read. Nothing is written but the read's ``ai_read`` row."""
     check_not_system_superuser(request, "read invoices")
     check_create_bill(request.entity_role)
     data, mime = invoice_reader.checked_invoice(invoice)

@@ -167,3 +167,14 @@ def attach_invoice(bill, name="invoice.pdf"):
 def draft_bill_with_attachment(db, draft_bill):
     attach_invoice(draft_bill)
     return draft_bill
+
+
+@pytest.fixture
+def ai_policy(db):
+    """minty-db's one ``ai_policy`` row (seed_catalogue.sql writes it in a real database): one
+    model, no backup, no extra caps, and a default grant large enough for a test's many reads (the
+    grant rules themselves are minty-petty-cash-api's tests). A test changes it as an operator would."""
+    from minty_db.models import AiPolicy
+
+    return AiPolicy.objects.create(id=1, primary_model="gemini-3.8-flash", backup_model=None,
+                                   default_grant={"tokens": 1000000}, limit_rules=[])

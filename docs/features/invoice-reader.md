@@ -1,7 +1,7 @@
 # Invoice reader - reading an invoice into the new-bill form
 
 When an invoice is attached in minty-payment-request-web's new-bill form and the person presses
-**Read the invoice** (never on attaching it - owner, 2026-11-18), a vision model reads it
+**Read invoice** (never on attaching it - owner, 2026-11-18), a vision model reads it
 and the form's empty fields are **filled as suggestions** the person checks (owner, 2026-11-04):
 the supplier, the invoice and due dates, the amount, the description and the account. Nothing is
 saved until Confirm or Save as Draft, a supplier is never created automatically, and the form
@@ -14,8 +14,9 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
 ## Where it lives
 
 - `GET /api/v1/bills/extract/status/` (`bills/api.py::extract_status_endpoint`, 2026-11-18) -
-  `{"enabled": bool}`, `BILL_AI_ENABLED` read on the call: the form offers "Read the invoice" only
-  when it is on. Asked by the same people as the read (403 otherwise).
+  `BILL_AI_ENABLED` and a usable `ai_policy`, read on the call, with the company's AI allowance
+  left (below): the form offers "Read invoice" only when it is on. Asked by the same people as the read
+  (403 otherwise).
 - `POST /api/v1/bills/extract/` (`bills/api.py::extract_invoice_endpoint`) - multipart, one
   `invoice`. Who may ask: `check_create_bill` and not a system superuser outside their own
   company (403). The file: one PDF / JPEG / PNG of at most 10 MB, judged by its bytes
@@ -38,19 +39,65 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
     capped at 200 characters and an unmatched supplier name (`detected_name`, for the form's
     "+ Add ... as a new supplier") at 100. The currency read off the invoice is handed on only so
     the form can note a mismatch: a bill always takes the company's currency.
-- `minty_shared.ai` (minty-shared-py, extra `ai`) - the engine: the switch, the call and its one
-  retry, the per-process rate limit, usage and cost, and the ONE log line (numbers only, never a
-  value read off an invoice; logger `minty-shared`, into `logs/core.log`).
+- `minty_shared.ai` (minty-shared-py, extra `ai`) - the engine: the switch, the models and their
+  failover, the call and its one retry, usage and cost, and the ONE log line (numbers only, never a
+  value read off an invoice; `model=` the model that answered, `attempts=` the chain; logger
+  `minty-shared`, into `logs/core.log`).
   `minty_shared.model_input` makes the small copy the model reads (an image capped at 2048 px and
   saved once as JPEG; a PDF's first page). The stored attachment is never changed.
+
+## The company's AI allowance and the models (owner, 2026-11-18)
+
+AI reading is a preview. **Each company reads against its own grants**, Petty Cash and Payment
+Request together, and the models are settings - all in minty-db (v0.13), changed with an UPDATE or
+minty-petty-cash-api's `python manage.py ai_policy`, never a release:
+
+- `ai_grant`: an allowance given to one company - `tokens_total` and/or `reads_total`, an optional
+  `expires_at`, `source` (`default` | `manual`), who gave it and why. A top-up is another grant. A
+  used-up or expired grant is spent and stays as the record.
+- `ai_policy` (one row): `primary_model`, `backup_model`, `default_grant` - the one-time grant every
+  company is given automatically on its first read (`{"tokens": n, "reads": n, "days": n}`; NULL =
+  only grants given by hand) - and `limit_rules`, optional extra caps over every company
+  (`{"reads": n, "tokens": n, "period_days": n}`, all applying; a rolling window, e.g. a daily
+  throttle). The preview: `default_grant {"tokens": 20000}` (about four to five receipts; a read is
+  ~3,500-5,700 tokens), no extra caps. The default grant is given once per company, ever
+  (`uq_ai_grant_one_default`): a used-up company stays used up until it is given another grant
+  (`manage.py ai_policy --grant <company id> --tokens 50000 [--reads n] [--days n] [--note ...]`,
+  or minty-web's Select Company in its **AI allowances** mode - every superuser; minty-accounts-api's
+  `docs/features/ai-allowances.md`).
+- `ai_read`: one row per read asked for - `pending`, then `ok` or `failed` - charged to one grant
+  (the oldest with room), with the module, the model that answered, the chain tried
+  (`gemini-3.5-flash-lite:timeout>gemini-3.8-flash:ok`) and every attempt's tokens.
+- **What counts:** a grant is charged the tokens of reads a model answered (even with nothing usable
+  in them); a failed read uses none of it, though its billed tokens are recorded and count against
+  the extra caps (our cost guard). A grant is used up once its tokens reach its total - the read
+  that crosses it finishes. A refusal before the model is asked (switched off, file too large, no
+  accounts or suppliers) uses nothing.
+- **How:** `minty_shared.django.ai_allowance` (minty-shared-py v0.7) - `reserve` under a per-company
+  Postgres advisory lock (it gives the default grant on the first read; two clicks with room for
+  one: one passes), `finish`, `give_grant`, `reader_status`. A missing or unusable policy row turns
+  reading OFF and logs an error - never a guessed limit.
+- **Failover:** the engine tries `primary_model`, then `backup_model` when the first times out,
+  errors, is rate-limited, truncates or replies unusably (not on a safety block). Only a provider in
+  `minty_shared.ai.APPROVED_PROVIDERS` (Gemini today) is ever called; a model id names its provider
+  (`gemini-...`, or `<provider>:<model>`), so another approved provider can be added later.
+- **The answer** carries `reader` - `{enabled, percent_left, reads_used, reads_limit, reads_left,
+  blocked, resumes_at}` - after every read, so the page's "80% of your AI allowance left" moves
+  with no extra call. `percent_left` is measured over the grants that still have room (a top-up
+  after a spent grant reads 100%). Used up, the route answers `limit_reached` without asking the
+  model and the page disables the button.
+- The in-process `RateLimiter` and `*_RATE_USER_PER_MIN`/`*_RATE_ENTITY_PER_HOUR` are gone (replaced).
+- **Production:** the owner chose Vertex AI (2026-11-18); until it is set up production still uses
+  the direct Gemini API on the FREE tier, which does not meet "approved providers only".
 
 ## Configuration
 
 | Variable | Meaning |
 |---|---|
 | `BILL_AI_ENABLED` | off unless on - the route answers `disabled`. Its own switch: the receipt reader's `EXPENSE_AI_ENABLED` does not turn it on |
-| `BILL_AI_MODEL` (`gemini-3.5-flash`), `BILL_AI_THINKING_LEVEL` (`low`), `BILL_AI_MAX_OUTPUT_TOKENS` (4096), `BILL_AI_TIMEOUT_S` (25) | the call |
-| `BILL_AI_RATE_USER_PER_MIN` (10), `BILL_AI_RATE_ENTITY_PER_HOUR` (200) | in-process rate limits per person and per company |
+| `ai_policy` (database) | the models (primary, backup) and the limit rules - above |
+| `BILL_AI_MODEL` | only when no models are given |
+| `BILL_AI_THINKING_LEVEL` (`low`), `BILL_AI_MAX_OUTPUT_TOKENS` (4096), `BILL_AI_TIMEOUT_S` (25, per model tried) | the call |
 | `BILL_AI_CONF_HIGH` (0.85), `BILL_AI_CONF_MEDIUM` (0.60) | the confidence bands: low is never filled |
 | `BILL_AI_MAX_FILE_MB` (10) | the model's size cap |
 | `GEMINI_API_KEY`, `EXPENSE_AI_ALLOW_DIRECT_API`, `EXPENSE_AI_DIRECT_TIER`, `EXPENSE_AI_USE_VERTEX`, `EXPENSE_AI_LOCATION`, `GOOGLE_CLOUD_PROJECT` | the route to the model and the tier assertion - shared with the receipt reader (direct Gemini API, paid tier; no residency commitment, so invoices may be processed outside Singapore) |
@@ -58,6 +105,8 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
 ## Tests
 
 `bills/tests/test_invoice_reader.py` - the route (who may ask, the file refusals, the silent
-reasons, its own switch), the context sent (only the form's accounts and the current org's
+reasons, its own switch), the allowance (the last read refused, Petty Cash's reads counted here,
+the read recorded as Payment Request's with the model that answered after a failover, no policy =
+off), the context sent (only the form's accounts and the current org's
 suppliers, in a stable order), the reply checks, and the one log line; the model is a stand-in.
 The engine's own cases are minty-shared-py's `tests/test_ai.py`.

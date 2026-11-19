@@ -3603,7 +3603,7 @@
     },
     "/api/v1/bills/extract/": {
       "post": {
-        "description": "Multipart ``invoice`` -> the model's suggestions for the new-bill form\n(``services/invoice_reader.py``, on the engine shared with Petty Cash's receipt reader). Who\nmay ask (403) and the file (one PDF / JPEG / PNG of at most 10 MB, by its bytes; 422) are\nrefused; past those every outcome is 200 ``{suggestions, reason}`` - switched off, rate\nlimited, too large, no accounts or suppliers, or any failure of the model is ``suggestions:\nnull`` with a reason. Nothing is written.",
+        "description": "Multipart ``invoice`` -> the model's suggestions for the new-bill form\n(``services/invoice_reader.py``, on the engine shared with Petty Cash's receipt reader). Who\nmay ask (403) and the file (one PDF / JPEG / PNG of at most 10 MB, by its bytes; 422) are\nrefused; past those every outcome is 200 ``{suggestions, reason, reader}`` - switched off, the\ncompany's AI reads used up (``limit_reached``), too large, no accounts or suppliers, or any\nfailure of the model is ``suggestions: null`` with a reason; ``reader`` is the allowance after\nthe read. Nothing is written but the read's ``ai_read`` row.",
         "operationId": "bills_api_extract_invoice_endpoint",
         "parameters": [],
         "requestBody": {
@@ -3674,7 +3674,7 @@
     },
     "/api/v1/bills/extract/status/": {
       "get": {
-        "description": "``{\"enabled\": bool}`` - the new-bill form offers \"Read the invoice\" only when\n``BILL_AI_ENABLED`` is on; the invoice is read only on that press (owner, 2026-11-18). Asked by\nthe same people as ``POST /extract/``.",
+        "description": "``{\"enabled\": bool, reads_used, reads_limit, reads_left, blocked, resumes_at}`` - the new-bill\nform offers \"Read with AI\" only when ``BILL_AI_ENABLED`` is on and ``ai_policy`` is usable; the\ninvoice is read only on that press, and the company's reads are shared with Petty Cash (owner,\n2026-11-18). A switched-off reader sends ``{\"enabled\": false}`` alone. Asked by the same people\nas ``POST /extract/``.",
         "operationId": "bills_api_extract_status_endpoint",
         "parameters": [],
         "responses": {
@@ -3706,7 +3706,7 @@
             "BearerAuth": []
           }
         ],
-        "summary": "Whether the invoice reader is switched on",
+        "summary": "Whether the invoice reader is switched on, and the company's AI reads left",
         "tags": [
           "Bills"
         ]

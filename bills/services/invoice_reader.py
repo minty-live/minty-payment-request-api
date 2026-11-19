@@ -26,6 +26,7 @@ from decimal import Decimal, InvalidOperation
 
 from minty_db.models import Entity, XeroContactSync
 from minty_shared import ai
+from minty_shared.django import ai_allowance
 from minty_shared.model_input import prepare_for_model
 from pydantic import BaseModel, Field
 
@@ -37,7 +38,6 @@ from core.exceptions import BillValidationError
 logger = logging.getLogger("minty-api")
 
 CONFIG = ai.ReaderConfig("BILL_AI")
-LIMITER = ai.RateLimiter()
 
 _MAX_AMOUNT = Decimal("10000000")
 _MAX_DESCRIPTION = 200
@@ -266,23 +266,47 @@ def checked_invoice(uploads) -> tuple[bytes, str]:
     return data, mime
 
 
+def reader_status(entity_id) -> dict:
+    """The form's reader: whether "Read with AI" is offered, and the company's reads left
+    (shared with Petty Cash; owner, 2026-11-18)."""
+    return ai_allowance.reader_status(CONFIG.enabled(), entity_id)
+
+
 def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
-    """``{suggestions, reason}`` for an invoice the route has checked (who asks, one PDF/JPEG/PNG
-    by its bytes, at most 10 MB). ``suggestions`` is null on every failure."""
+    """``{suggestions, reason, reader}`` for an invoice the route has checked (who asks, one
+    PDF/JPEG/PNG by its bytes, at most 10 MB). ``suggestions`` is null on every failure; ``reader``
+    is the allowance after this read. A read is reserved before the model is called and counts
+    only if a model answered (``ai_allowance``); a refusal before that point uses nothing."""
     if not CONFIG.enabled():
-        return {"suggestions": None, "reason": ai.REASON_DISABLED}
-    if not LIMITER.allow(user_id, entity_id, CONFIG):
-        logger.info("invoice reader: rate limited entity=%s", entity_id)
-        return {"suggestions": None, "reason": ai.REASON_RATE_LIMITED}
+        return {"suggestions": None, "reason": ai.REASON_DISABLED, "reader": {"enabled": False}}
+    policy = ai_allowance.load_policy()
+    if policy is None:
+        return {"suggestions": None, "reason": ai.REASON_NOT_CONFIGURED, "reader": {"enabled": False}}
     if len(data) > CONFIG.max_file_bytes():
-        return {"suggestions": None, "reason": ai.REASON_FILE_TOO_LARGE}
+        return _no_read(ai.REASON_FILE_TOO_LARGE, entity_id, policy)
     context = build_context(entity_id)
     if context is None:
         logger.info("invoice reader: no bill accounts or suppliers for entity=%s", entity_id)
-        return {"suggestions": None, "reason": ai.REASON_NO_CONTEXT}
-    document, document_mime = prepare_for_model(data, mime)
-    result = ai.read(document, document_mime, config=CONFIG, instruction=INSTRUCTION,
-                     prefix_text=prefix_text(context), closing_text=CLOSING,
-                     reply_model=InvoiceSuggestion, validate=lambda parsed: validate(parsed, context))
+        return _no_read(ai.REASON_NO_CONTEXT, entity_id, policy)
+    read_id, allowance = ai_allowance.reserve(entity_id, user_id, ai_allowance.MODULE_PAYMENT_REQUEST, policy)
+    if read_id is None:
+        logger.info("invoice reader: allowance used up entity=%s", entity_id)
+        return {"suggestions": None, "reason": ai.REASON_LIMIT_REACHED,
+                "reader": {"enabled": True, **allowance.as_dict()}}
+    result = ai.Extraction(reason=ai.REASON_PROVIDER_ERROR)
+    try:
+        document, document_mime = prepare_for_model(data, mime)
+        result = ai.read(document, document_mime, config=CONFIG, instruction=INSTRUCTION,
+                         prefix_text=prefix_text(context), closing_text=CLOSING,
+                         reply_model=InvoiceSuggestion, validate=lambda parsed: validate(parsed, context),
+                         models=policy.models)
+    finally:
+        # Even if something here raised, the reserved read is closed (failed, so never counted).
+        ai_allowance.finish(read_id, result)
     ai.log_read(CONFIG, result, entity_id=entity_id, user_id=user_id)
-    return result.answer()
+    return {**result.answer(), "reader": {"enabled": True, **ai_allowance.status(entity_id, policy).as_dict()}}
+
+
+def _no_read(reason: str, entity_id, policy: ai_allowance.Policy) -> dict:
+    return {"suggestions": None, "reason": reason,
+            "reader": {"enabled": True, **ai_allowance.status(entity_id, policy).as_dict()}}

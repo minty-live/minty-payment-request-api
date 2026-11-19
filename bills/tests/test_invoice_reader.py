@@ -11,8 +11,9 @@ import json
 
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
-from minty_db.models import Entity, UserEntity, XeroContactSync
+from minty_db.models import AiGrant, AiPolicy, AiRead, Entity, UserEntity, XeroContactSync
 from minty_shared import ai
+from minty_shared.django import ai_allowance
 
 from bills.models import EntityBillAccountXero
 from bills.services import invoice_reader
@@ -56,28 +57,36 @@ class FakeInteraction:
 
 
 class FakeModel:
+    """``by_model`` answers one model its own way (the failover); every other gets ``answer``."""
+
     def __init__(self):
         self.answer = FakeInteraction(_reply())
+        self.by_model = {}
         self.requests = []
         self.interactions = self
 
     def create(self, **request):
         self.requests.append(request)
-        if isinstance(self.answer, Exception):
-            raise self.answer
-        return self.answer
+        answer = self.by_model.get(request["model"], self.answer)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
 
 
 @pytest.fixture
-def model(monkeypatch) -> FakeModel:
+def model(monkeypatch, ai_policy) -> FakeModel:
     fake = FakeModel()
     monkeypatch.setattr(ai, "get_client", lambda timeout_s: fake)
     monkeypatch.setattr(ai.time, "sleep", lambda _s: None)
     for name, value in {"BILL_AI_ENABLED": "true", "BILL_AI_CONF_HIGH": "0.85",
-                        "BILL_AI_CONF_MEDIUM": "0.60", "BILL_AI_MODEL": "gemini-3.8-flash"}.items():
+                        "BILL_AI_CONF_MEDIUM": "0.60"}.items():
         monkeypatch.setenv(name, value)
-    invoice_reader.LIMITER.reset()
     return fake
+
+
+def _policy(**changes):
+    """Change the policy as an operator's UPDATE would."""
+    AiPolicy.objects.filter(id=1).update(**changes)
 
 
 @pytest.fixture
@@ -149,9 +158,8 @@ def test_the_prefix_carries_only_what_the_bill_form_offers(api_client, auth_head
 
 @pytest.mark.parametrize("env, reason", [
     ({"BILL_AI_ENABLED": "false"}, "disabled"),
-    ({"BILL_AI_RATE_USER_PER_MIN": "0"}, "rate_limited"),
     ({"BILL_AI_MAX_FILE_MB": "0"}, "file_too_large"),
-], ids=["off", "rate-limited", "too-large"])
+], ids=["off", "too-large"])
 def test_refusals_past_the_checks_are_a_silent_no_suggestion(api_client, auth_headers, test_user_entity,
                                                              lists, model, monkeypatch, env, reason):
     for name, value in env.items():
@@ -159,8 +167,9 @@ def test_refusals_past_the_checks_are_a_silent_no_suggestion(api_client, auth_he
 
     resp = _extract(api_client, auth_headers)
 
-    assert resp.status_code == 200 and resp.json() == {"suggestions": None, "reason": reason}
-    assert model.requests == []
+    body = resp.json()
+    assert resp.status_code == 200 and (body["suggestions"], body["reason"]) == (None, reason)
+    assert model.requests == [] and not AiRead.objects.exists()  # refused before a read: none used
 
 
 def test_the_receipt_reader_s_switch_does_not_turn_on_the_invoice_reader(api_client, auth_headers,
@@ -169,15 +178,17 @@ def test_the_receipt_reader_s_switch_does_not_turn_on_the_invoice_reader(api_cli
     monkeypatch.delenv("BILL_AI_ENABLED")
     monkeypatch.setenv("EXPENSE_AI_ENABLED", "true")
 
-    assert _extract(api_client, auth_headers).json() == {"suggestions": None, "reason": "disabled"}
+    assert _extract(api_client, auth_headers).json() == {"suggestions": None, "reason": "disabled",
+                                                         "reader": {"enabled": False}}
 
 
 def test_a_company_with_nothing_to_choose_from_asks_no_question(api_client, auth_headers,
                                                                 test_user_entity, model):
     resp = _extract(api_client, auth_headers)
 
-    assert resp.status_code == 200 and resp.json() == {"suggestions": None, "reason": "no_context"}
-    assert model.requests == []
+    body = resp.json()
+    assert resp.status_code == 200 and (body["suggestions"], body["reason"]) == (None, "no_context")
+    assert model.requests == [] and body["reader"]["percent_left"] == 100
 
 
 def test_a_failure_of_the_model_is_a_silent_no_suggestion(api_client, auth_headers, test_user_entity,
@@ -186,7 +197,9 @@ def test_a_failure_of_the_model_is_a_silent_no_suggestion(api_client, auth_heade
 
     resp = _extract(api_client, auth_headers)
 
-    assert resp.status_code == 200 and resp.json() == {"suggestions": None, "reason": "timeout"}
+    body = resp.json()
+    assert resp.status_code == 200 and (body["suggestions"], body["reason"]) == (None, "timeout")
+    assert body["reader"]["percent_left"] == 100  # a failed read uses none up
 
 
 def test_one_log_line_with_numbers_and_never_the_values(api_client, auth_headers, test_user_entity,
@@ -197,6 +210,7 @@ def test_one_log_line_with_numbers_and_never_the_values(api_client, auth_headers
 
     [line] = [r.getMessage() for r in caplog.records if "bill_ai: extract" in r.getMessage()]
     assert "tokens_in=5000" in line and "status=ok" in line
+    assert "model=gemini-3.8-flash attempts=gemini-3.8-flash:ok" in line
     assert "ABC" not in line and "1200" not in line and "Flyer" not in line
 
 
@@ -236,9 +250,10 @@ def test_only_someone_who_may_create_a_bill_may_ask(api_client, auth_headers, te
 
 
 @pytest.mark.parametrize(("switch", "enabled"), [("true", True), ("false", False), (None, False)])
-def test_the_form_learns_whether_the_reader_is_on(api_client, auth_headers, test_user_entity, monkeypatch,
-                                                   switch, enabled):
-    """The form offers "Read the invoice" only when ``BILL_AI_ENABLED`` is on (off unless set)."""
+def test_the_form_learns_whether_the_reader_is_on(api_client, auth_headers, test_user_entity, ai_policy,
+                                                   monkeypatch, switch, enabled):
+    """The form offers "Read with AI" only when ``BILL_AI_ENABLED`` is on (off unless set), with the
+    company's reads left; a switched-off reader sends no count."""
     if switch is None:
         monkeypatch.delenv("BILL_AI_ENABLED", raising=False)
     else:
@@ -246,7 +261,11 @@ def test_the_form_learns_whether_the_reader_is_on(api_client, auth_headers, test
 
     resp = api_client.get(STATUS_URL, **auth_headers)
 
-    assert resp.status_code == 200 and resp.json() == {"enabled": enabled}
+    expected = {"enabled": False}
+    if enabled:
+        expected = {"enabled": True, "reads_used": None, "reads_limit": None, "reads_left": None,
+                    "percent_left": 100, "blocked": False, "resumes_at": None}
+    assert resp.status_code == 200 and resp.json() == expected
 
 
 def test_the_reader_s_status_is_asked_by_those_who_may_read(api_client, auth_headers, test_user, test_entity,
@@ -339,3 +358,57 @@ def test_the_instruction_names_the_issuer_and_never_the_bill_number():
     assert "supplier_name IS AN EXCEPTION" in instruction
     assert "bill number" not in instruction.lower() and "invoice number" not in instruction.lower()
     assert "bill_number" not in invoice_reader.InvoiceSuggestion.model_fields
+
+
+# --- the allowance: one per company, shared with Petty Cash (owner, 2026-11-18) ------------------
+
+
+@pytest.mark.usefixtures("test_user_entity", "lists")
+def test_the_first_read_gives_the_one_time_grant_and_a_used_up_grant_stops_reading(api_client, auth_headers,
+                                                                                    test_entity, model):
+    _policy(default_grant={"tokens": 5000})
+
+    first = _extract(api_client, auth_headers).json()  # 5,700 tokens: the crossing read finishes
+    refused = _extract(api_client, auth_headers).json()
+
+    assert first["reason"] is None and first["reader"]["blocked"] and first["reader"]["percent_left"] == 0
+    assert (refused["suggestions"], refused["reason"]) == (None, "limit_reached")
+    assert len(model.requests) == 1
+    [grant] = AiGrant.objects.filter(entity_id=test_entity.id)
+    assert (grant.source, grant.tokens_total) == ("default", 5000)
+
+
+@pytest.mark.usefixtures("test_user_entity", "lists")
+def test_petty_cash_reads_use_the_same_grants(api_client, auth_headers, test_entity, model):
+    _policy(default_grant=None)
+    grant = ai_allowance.give_grant(test_entity.id, ai_allowance.GrantSpec(tokens=10000))
+    AiRead.objects.create(entity_id=test_entity.id, grant_id=grant, module="petty_cash", status="ok",
+                          tokens_in=10000)
+
+    status = api_client.get(STATUS_URL, **auth_headers).json()
+    assert (status["percent_left"], status["blocked"]) == (0, True)
+    assert _extract(api_client, auth_headers).json()["reason"] == "limit_reached"
+    assert model.requests == []
+
+
+@pytest.mark.usefixtures("test_user_entity", "lists")
+def test_a_read_is_recorded_as_payment_request_s_with_the_model_that_answered(api_client, auth_headers,
+                                                                             test_entity, model):
+    _policy(primary_model="gemini-3.5-flash-lite", backup_model="gemini-3.8-flash")
+    model.by_model["gemini-3.5-flash-lite"] = FakeInteraction("{not json")
+
+    body = _extract(api_client, auth_headers).json()
+
+    assert body["reason"] is None and body["reader"]["percent_left"] == 99
+    [row] = AiRead.objects.filter(entity_id=test_entity.id)
+    assert (row.module, row.status, row.model_answered) == ("payment_request", "ok", "gemini-3.8-flash")
+    assert row.attempts == "gemini-3.5-flash-lite:invalid_reply>gemini-3.8-flash:ok"
+    assert row.tokens_in == 10000  # both attempts were billed
+
+
+@pytest.mark.usefixtures("test_user_entity", "lists")
+def test_no_policy_turns_reading_off(api_client, auth_headers, model):
+    AiPolicy.objects.all().delete()
+
+    assert api_client.get(STATUS_URL, **auth_headers).json() == {"enabled": False}
+    assert _extract(api_client, auth_headers).json()["reason"] == "not_configured"
