@@ -37,14 +37,38 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
     positive decimal up to 10,000,000 in the company currency's own places (JPY 0); a date that is
     not `YYYY-MM-DD` is dropped, and so is a due date before the invoice date; the description is
     capped at 200 characters and an unmatched supplier name (`detected_name`, for the form's
-    "+ Add ... as a new supplier") at 100. The currency read off the invoice is handed on only so
-    the form can note a mismatch: a bill always takes the company's currency.
+    "+ Add ... as a new supplier") at 100. A bill always takes the company's currency: an invoice
+    in another one has its amount converted (below), kept as read until then - never rounded to
+    the company's places first.
 - `minty_shared.ai` (minty-shared-py, extra `ai`) - the engine: the switch, the models and their
   failover, the call and its one retry, usage and cost, and the ONE log line (numbers only, never a
   value read off an invoice; `model=` the model that answered, `attempts=` the chain; logger
   `minty-shared`, into `logs/core.log`).
   `minty_shared.model_input` makes the small copy the model reads (an image capped at 2048 px and
   saved once as JPEG; a PDF's first page). The stored attachment is never changed.
+
+## An invoice in another currency (owner, 2026-11-19)
+
+When the invoice's currency is not the company's, the amount comes back **converted** at
+Frankfurter's rate (v1, the European Central Bank's reference rates, 30 currencies, no key) -
+`minty_shared.fx.exchange_for` (minty-shared-py v0.8), after the read and outside the models'
+failover: the invoice's own `invoice_date` (basis `receipt`), else the day the bill is entered - the
+company's today in its country's zone (`report_date`) - when it is empty, in the future or more than a
+year off; a weekend or holiday gets the previous business day's rate. Original x rate, half up, in
+the company currency's places (JPY 0); the 10,000,000 cap is on the converted amount. The answer
+carries `exchange` `{original_currency, original_amount, rate, rate_date, date_basis, source}`. No
+rate (any error, 5 s timeout, a currency v1 doesn't have): the amount comes back empty with
+`exchange_failed: {currency}`; nothing is blocked.
+
+A saved bill keeps it: `POST /bills/`, `/bills/submit/`, `/bills/draft/` and `PUT /bills/{id}/draft`,
+`PUT /bills/{id}` take an optional `exchange` - the six columns by name (`original_currency`,
+`original_amount`, `exchange_rate`, `exchange_rate_date`, `exchange_rate_basis`,
+`exchange_rate_source`) - checked by `fx.saved_exchange` (all six or none, another currency, a rate
+above 0 for a day not after today, a known basis, Frankfurter, and original x rate giving the bill's
+amount; else 422 "The exchange-rate details don't match this amount. Read the invoice again or enter
+the amount yourself."). An update that changes the amount without them clears them. Xero is
+unchanged: `amount` is the company-currency figure. `FX_API_URL` moves the address. Tests:
+`bills/tests/test_invoice_exchange.py`.
 
 ## The company's AI allowance and the models (owner, 2026-11-18)
 

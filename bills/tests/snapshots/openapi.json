@@ -226,6 +226,20 @@
             ],
             "title": "Due Date"
           },
+          "exchange": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
+          },
           "invoice_date": {
             "anyOf": [
               {
@@ -326,6 +340,20 @@
               }
             ],
             "title": "Due Date"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
           },
           "invoice_date": {
             "anyOf": [
@@ -859,6 +887,20 @@
               }
             ],
             "title": "Due Date"
+          },
+          "exchange": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exchange"
           },
           "invoice_date": {
             "anyOf": [

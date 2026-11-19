@@ -58,6 +58,13 @@ class Bill(models.Model):
     xero_account_code = models.CharField(max_length=20, blank=True, default="")
     #: What the last successful publish sent as the supplier's name (Xero optional, 2026-11-10).
     published_contact_name = models.CharField(max_length=255, null=True, blank=True)
+    # how an AI-read amount in another currency was converted (minty-db v0.14; all six or none)
+    original_currency = models.CharField(max_length=3, null=True, blank=True)
+    original_amount = models.DecimalField(max_digits=14, decimal_places=2, null=True, blank=True)
+    exchange_rate = models.DecimalField(max_digits=20, decimal_places=10, null=True, blank=True)
+    exchange_rate_date = models.DateField(null=True, blank=True)
+    exchange_rate_basis = models.CharField(max_length=16, null=True, blank=True)
+    exchange_rate_source = models.CharField(max_length=32, null=True, blank=True)
     created_by = models.UUIDField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

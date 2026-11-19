@@ -11,7 +11,9 @@ is "no suggestion" with a reason.
 What is read: the supplier (from the company's own list), the invoice and due dates, the total,
 a short description and the bill account (by code - bills store codes, and an account added by
 hand has no Xero id). Not read: the bill number, which is Minty's own ``MBI...`` reference.
-The currency is read only to note a mismatch: a bill always takes the company's currency.
+A bill always takes the company's currency: an invoice in another one has its amount converted at
+Frankfurter's rate (``minty_shared.fx``, owner 2026-11-19), and the bill keeps how
+(``exchange``) while its amount is the converted one.
 
 Configuration: ``BILL_AI_*`` (``minty_shared.ai.ReaderConfig``), its own switch and limits; the
 route to the model (``GEMINI_API_KEY``, ``EXPENSE_AI_ALLOW_DIRECT_API``, ``EXPENSE_AI_DIRECT_TIER``)
@@ -25,9 +27,10 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 
 from minty_db.models import Entity, XeroContactSync
-from minty_shared import ai
+from minty_shared import ai, fx
 from minty_shared.django import ai_allowance
 from minty_shared.model_input import prepare_for_model
+from minty_shared.time import DEFAULT_ENTITY_TIMEZONE, country_timezone, today_in
 from pydantic import BaseModel, Field
 
 from bills.models import EntityBillAccountXero
@@ -40,6 +43,7 @@ logger = logging.getLogger("minty-api")
 CONFIG = ai.ReaderConfig("BILL_AI")
 
 _MAX_AMOUNT = Decimal("10000000")
+_MAX_FOREIGN_AMOUNT = Decimal("999999999999")
 _MAX_DESCRIPTION = 200
 
 
@@ -209,11 +213,17 @@ def validate(parsed: InvoiceSuggestion, context: dict) -> dict:
             logger.info("invoice reader: dropped an account code not in the sent list")
         account_field = ai.field("", 0.0, CONFIG, {"code": "", "name": ""})
 
-    places = int(context["entity"].get("places", 2))
+    currency = (parsed.currency or "").strip().upper()
+    if len(currency) != 3 or not currency.isalpha():
+        currency = ""
+    # another currency: kept as read (2 places) and capped only once converted (fx.exchange_for);
+    # rounding it to the company's places first would convert the wrong number
+    foreign = bool(currency) and currency != context["entity"]["currency"]
+    places = 2 if foreign else int(context["entity"].get("places", 2))
     amount_value = ""
     try:
         amount = Decimal(str(parsed.amount_value or 0)).quantize(Decimal(1).scaleb(-places))
-        if Decimal("0") < amount <= _MAX_AMOUNT:
+        if Decimal("0") < amount <= (_MAX_FOREIGN_AMOUNT if foreign else _MAX_AMOUNT):
             amount_value = format(amount, "f")
     except (InvalidOperation, ValueError, TypeError):
         amount_value = ""
@@ -223,10 +233,6 @@ def validate(parsed: InvoiceSuggestion, context: dict) -> dict:
     if invoice_date and due_date and due_date < invoice_date:
         logger.info("invoice reader: dropped a due date before the invoice date")
         due_date = ""
-
-    currency = (parsed.currency or "").strip().upper()
-    if len(currency) != 3 or not currency.isalpha():
-        currency = ""
 
     return {
         "supplier": supplier,
@@ -304,7 +310,16 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
         # Even if something here raised, the reserved read is closed (failed, so never counted).
         ai_allowance.finish(read_id, result)
     ai.log_read(CONFIG, result, entity_id=entity_id, user_id=user_id)
-    return {**result.answer(), "reader": {"enabled": True, **ai_allowance.status(entity_id, policy).as_dict()}}
+    answer = result.answer()
+    if answer["suggestions"]:
+        # another currency: converted at Frankfurter's rate (owner, 2026-11-19) on the invoice's
+        # day, else the day the bill is entered - after the read, outside the model's failover
+        today = today_in(country_timezone(context["entity"]["country"]) or DEFAULT_ENTITY_TIMEZONE)
+        answer["suggestions"] = fx.exchange_for(
+            answer["suggestions"], report_date=today, today=today, places=int(context["entity"].get("places", 2)),
+            max_amount=_MAX_AMOUNT, fetch=fx.frankfurter_rate, date_field="invoice_date",
+        )
+    return {**answer, "reader": {"enabled": True, **ai_allowance.status(entity_id, policy).as_dict()}}
 
 
 def _no_read(reason: str, entity_id, policy: ai_allowance.Policy) -> dict:

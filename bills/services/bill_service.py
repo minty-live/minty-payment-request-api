@@ -2,12 +2,15 @@ import logging
 from decimal import Decimal
 
 from django.db import transaction
+from minty_db.models import Entity
+from minty_shared import fx
+from minty_shared.time import DEFAULT_ENTITY_TIMEZONE, country_timezone, today_in
 
 from bills.models import Audit, Bill, BillLineItem
 from bills.services.audit_service import log_audit
 from bills.services.bill_reference_generator import generate_unique_bill_reference
 from bills.services.payment_service import sync_bill_status_from_payments
-from core.entity_currency import entity_currency_code, require_entity_currency_code
+from core.entity_currency import entity_currency, entity_currency_code, require_entity_currency_code
 from core.exceptions import BillValidationError
 
 logger = logging.getLogger("minty-api")
@@ -175,8 +178,35 @@ def _fill_missing_currency(bill: Bill, *, required: bool) -> None:
             bill.currency_code = code
 
 
+def _exchange(data, entity_id, amount) -> dict | None:
+    """How an AI-read amount in another currency was converted (owner, 2026-11-19): the six details
+    the save sent, checked against ``amount`` (``fx.saved_exchange``), or None when it sent none."""
+    sent = getattr(data, "exchange", None)
+    if not sent:
+        return None
+    code, places = entity_currency(entity_id)
+    country = Entity.objects.filter(id=entity_id).values_list("country_code", flat=True).first()
+    today = today_in(country_timezone(country) or DEFAULT_ENTITY_TIMEZONE)
+    try:
+        return fx.saved_exchange(sent, amount=Decimal(str(amount or 0)), company_currency=code, places=places,
+                                 today=today)
+    except fx.ExchangeRefusedError:
+        raise BillValidationError(fx.exchange_refused("invoice")) from None
+
+
+def _exchange_change(bill: Bill, data) -> dict | None:
+    """An update's six details: new ones replace the bill's; an amount changed without them
+    clears them (they no longer describe it); None leaves them as they are."""
+    amount = data.amount if getattr(data, "amount", None) is not None else bill.amount
+    exchange = _exchange(data, bill.entity_id, amount)
+    if exchange is None and Decimal(str(amount)) != Decimal(str(bill.amount)):
+        return dict.fromkeys(fx.COLUMNS)
+    return exchange
+
+
 def save_bill_draft(data, user_id: str, entity_id: str) -> Bill:
     currency_code = require_entity_currency_code(entity_id)
+    exchange = _exchange(data, entity_id, data.amount)
     ref = _final_reference_for_create(
         entity_id, user_id, getattr(data, "reference", None)
     )
@@ -194,6 +224,7 @@ def save_bill_draft(data, user_id: str, entity_id: str) -> Bill:
             xero_account_code=getattr(data, "xero_account_code", None) or "",
             uploaded_by=user_id,
             status=Bill.Status.DRAFT,
+            **(exchange or {}),
         )
 
         for idx, item in enumerate(data.line_items or []):
@@ -251,12 +282,15 @@ def update_bill_draft(bill: Bill, data, user_id: str) -> Bill:
         )
     changes = _collect_field_changes(bill, data, draft_fields)
     changes.extend(_collect_line_item_changes(bill, data))
+    exchange = _exchange_change(bill, data)
 
     with transaction.atomic():
         for field in draft_fields:
             new_val = getattr(data, field, None)
             if new_val is not None:
                 setattr(bill, field, new_val)
+        for field, value in (exchange or {}).items():
+            setattr(bill, field, value)
 
         bill.status = Bill.Status.DRAFT
         _fill_missing_currency(bill, required=False)
@@ -292,6 +326,7 @@ def update_bill_draft(bill: Bill, data, user_id: str) -> Bill:
 
 def create_bill(data, user_id: str, entity_id: str) -> Bill:
     currency_code = require_entity_currency_code(entity_id)
+    exchange = _exchange(data, entity_id, data.amount)
     ref = _final_reference_for_create(
         entity_id, user_id, getattr(data, "reference", None)
     )
@@ -309,6 +344,7 @@ def create_bill(data, user_id: str, entity_id: str) -> Bill:
             xero_account_code=getattr(data, "xero_account_code", "") or "",
             uploaded_by=user_id,
             status=Bill.Status.DRAFT,
+            **(exchange or {}),
         )
 
         for idx, item in enumerate(data.line_items):
@@ -333,6 +369,7 @@ def create_bill(data, user_id: str, entity_id: str) -> Bill:
 def submit_bill(data, user_id: str, entity_id: str) -> Bill:
     validate_for_submission(data)
     currency_code = require_entity_currency_code(entity_id)
+    exchange = _exchange(data, entity_id, data.amount)
     ref = _final_reference_for_create(
         entity_id, user_id, getattr(data, "reference", None)
     )
@@ -350,6 +387,7 @@ def submit_bill(data, user_id: str, entity_id: str) -> Bill:
             xero_account_code=getattr(data, "xero_account_code", "") or "",
             uploaded_by=user_id,
             status=Bill.Status.SUBMITTED,
+            **(exchange or {}),
         )
 
         for idx, item in enumerate(data.line_items):
@@ -398,12 +436,15 @@ def update_bill(bill: Bill, data, user_id: str) -> Bill:
     old_status = bill.status
     changes = _collect_field_changes(bill, data, updatable_fields)
     changes.extend(_collect_line_item_changes(bill, data))
+    exchange = _exchange_change(bill, data)
 
     with transaction.atomic():
         for field in updatable_fields:
             new_val = getattr(data, field, None)
             if new_val is not None:
                 setattr(bill, field, new_val)
+        for field, value in (exchange or {}).items():
+            setattr(bill, field, value)
 
         if data.line_items is not None:
             bill.line_items.all().delete()

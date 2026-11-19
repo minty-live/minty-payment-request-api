@@ -110,6 +110,9 @@ class BillCreateIn(Schema):
     currency_code: str = ""  # ignored: the server uses the entity's currency
     xero_account_code: str = ""
     line_items: list[LineItemIn] = []
+    # how an AI-read amount in another currency was converted - the six fx.COLUMNS, checked
+    # against the amount (owner, 2026-11-19); absent = none
+    exchange: dict[str, str] | None = None
 
 
 class BillDraftIn(Schema):
@@ -123,6 +126,8 @@ class BillDraftIn(Schema):
     currency_code: str | None = None  # ignored: the server uses the entity's currency
     xero_account_code: str | None = None
     line_items: list[LineItemIn] | None = None
+    # a converted amount's six details; absent with a changed amount clears the bill's
+    exchange: dict[str, str] | None = None
 
 
 class ReturnBillIn(Schema):
@@ -141,6 +146,8 @@ class BillUpdateIn(Schema):
     currency_code: str | None = None  # ignored: the server uses the entity's currency
     xero_account_code: str | None = None
     line_items: list[LineItemIn] | None = None
+    # a converted amount's six details; absent with a changed amount clears the bill's
+    exchange: dict[str, str] | None = None
 
 
 class BillOut(Schema):
