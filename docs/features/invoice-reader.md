@@ -14,7 +14,7 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
 ## Where it lives
 
 - `GET /api/v1/bills/extract/status/` (`bills/api.py::extract_status_endpoint`, 2026-11-18) -
-  `BILL_AI_ENABLED` and a usable `ai_policy`, read on the call, with the company's AI allowance
+  a usable `ai_policy` with `invoice_reader_on`, read on the call, with the company's AI allowance
   left (below): the form offers "Read invoice" only when it is on. Asked by the same people as the read
   (403 otherwise).
 - `POST /api/v1/bills/extract/` (`bills/api.py::extract_invoice_endpoint`) - multipart, one
@@ -126,20 +126,29 @@ minty-petty-cash-api's `python manage.py ai_policy`, never a release:
   after a spent grant reads 100%). Used up, the route answers `limit_reached` without asking the
   model and the page disables the button.
 - The in-process `RateLimiter` and `*_RATE_USER_PER_MIN`/`*_RATE_ENTITY_PER_HOUR` are gone (replaced).
-- **Production:** the owner chose Vertex AI (2026-11-18); until it is set up production still uses
-  the direct Gemini API on the FREE tier, which does not meet "approved providers only".
+- **Production:** Vertex AI in `asia-southeast1` (owner, 2026-11-20; below) once minty-shared v0.11
+  is released; until then production still uses the direct Gemini API on the FREE tier, which does
+  not meet "approved providers only".
 
 ## Configuration
 
-| Variable | Meaning |
-|---|---|
-| `BILL_AI_ENABLED` | off unless on - the route answers `disabled`. Its own switch: the receipt reader's `EXPENSE_AI_ENABLED` does not turn it on |
-| `ai_policy` (database) | the models (primary, backup) and the limit rules - above |
-| `BILL_AI_MODEL` | only when no models are given |
-| `BILL_AI_THINKING_LEVEL` (`low`), `BILL_AI_MAX_OUTPUT_TOKENS` (4096), `BILL_AI_TIMEOUT_S` (25, per model tried) | the call |
-| `BILL_AI_CONF_HIGH`, `BILL_AI_CONF_MEDIUM` | unused since the simple prompt (no confidence is asked) |
-| `BILL_AI_MAX_FILE_MB` (10) | the model's size cap |
-| `GEMINI_API_KEY`, `EXPENSE_AI_ALLOW_DIRECT_API`, `EXPENSE_AI_DIRECT_TIER`, `EXPENSE_AI_USE_VERTEX`, `EXPENSE_AI_LOCATION`, `GOOGLE_CLOUD_PROJECT` | the route to the model and the tier assertion - shared with the receipt reader (direct Gemini API, FREE tier in both environments; Vertex AI, project `minty-515207` in `asia-southeast1`, chosen and deferred 2026-11-20) |
+The route is Vertex AI only (owner, 2026-11-20; minty-shared v0.11): `models.generate_content` in
+`asia-southeast1` for project `minty-515207`, the model `gemini-3.5-flash` (the one Singapore
+serves), authenticated by the `minty-ai` service account's key file. The direct Gemini API is gone.
+
+| Where | Setting | Meaning |
+|---|---|---|
+| `ai_policy` (database) | `invoice_reader_on` | off unless on - the route answers `disabled`. Its own switch: the receipt reader's `receipt_reader_on` does not turn it on |
+| `ai_policy` | `primary_model`, `backup_model` | the models tried, in order - above |
+| `ai_policy` | `timeout_s` (25, per model tried), `max_output_tokens` (4096, thinking included), `thinking_level` (`low`) | the call - shared with the receipt reader |
+| `ai_policy` | `max_file_mb` (10) | the model's size cap |
+| `ai_policy` | `location` (`asia-southeast1`) | the Vertex AI region - it decides which models exist, so change the models with it (`--location`) |
+| environment | `GOOGLE_CLOUD_PROJECT` | Vertex AI's project (`minty-515207`); without it, no call is made (`not_configured`) |
+| environment | `GOOGLE_APPLICATION_CREDENTIALS` | the service account's key file (on Render a secret file) |
+
+The `ai_policy` settings are changed with minty-petty-cash-api's `python manage.py ai_policy`
+(`--invoice-reader on|off`, ...). The old `BILL_AI_*`, `EXPENSE_AI_*` and `GEMINI_API_KEY`
+variables are read by nothing.
 
 ## Tests
 

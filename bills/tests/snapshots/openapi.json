@@ -3863,7 +3863,7 @@
     },
     "/api/v1/bills/extract/status/": {
       "get": {
-        "description": "``{\"enabled\": bool, reads_used, reads_limit, reads_left, blocked, resumes_at}`` - the new-bill\nform offers \"Read with AI\" only when ``BILL_AI_ENABLED`` is on and ``ai_policy`` is usable; the\ninvoice is read only on that press, and the company's reads are shared with Petty Cash (owner,\n2026-11-18). A switched-off reader sends ``{\"enabled\": false}`` alone. Asked by the same people\nas ``POST /extract/``.",
+        "description": "``{\"enabled\": bool, reads_used, reads_limit, reads_left, blocked, resumes_at}`` - the new-bill\nform offers \"Read with AI\" only when ``ai_policy`` is usable and its ``invoice_reader_on`` is on; the\ninvoice is read only on that press, and the company's reads are shared with Petty Cash (owner,\n2026-11-18). A switched-off reader sends ``{\"enabled\": false}`` alone. Asked by the same people\nas ``POST /extract/``.",
         "operationId": "bills_api_extract_status_endpoint",
         "parameters": [],
         "responses": {

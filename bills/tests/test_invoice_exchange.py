@@ -16,7 +16,7 @@ from minty_db.models import CurrencyInfo, Entity
 from minty_shared import fx
 
 from bills.models import Bill
-from bills.tests.test_invoice_reader import FakeInteraction, _extract, _reply, lists, model  # noqa: F401
+from bills.tests.test_invoice_reader import FakeResponse, _extract, _reply, lists, model  # noqa: F401
 
 pytestmark = pytest.mark.django_db
 
@@ -38,7 +38,7 @@ def rates(monkeypatch):
 
 
 def _read(api_client, auth_headers, model, **reply):
-    model.answer = FakeInteraction(_reply(**reply))
+    model.answer = FakeResponse(_reply(**reply))
     return _extract(api_client, auth_headers).json()["suggestions"]
 
 

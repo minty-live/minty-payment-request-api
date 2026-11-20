@@ -170,7 +170,7 @@ def save_draft_endpoint(request, payload: BillDraftIn):
 )
 def extract_status_endpoint(request):
     """``{"enabled": bool, reads_used, reads_limit, reads_left, blocked, resumes_at}`` - the new-bill
-    form offers "Read with AI" only when ``BILL_AI_ENABLED`` is on and ``ai_policy`` is usable; the
+    form offers "Read with AI" only when ``ai_policy`` is usable and its ``invoice_reader_on`` is on; the
     invoice is read only on that press, and the company's reads are shared with Petty Cash (owner,
     2026-11-18). A switched-off reader sends ``{"enabled": false}`` alone. Asked by the same people
     as ``POST /extract/``."""

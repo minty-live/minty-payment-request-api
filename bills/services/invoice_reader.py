@@ -15,9 +15,11 @@ A bill always takes the company's currency: an invoice in another one has its am
 Frankfurter's rate (``minty_shared.fx``, owner 2026-11-19), and the bill keeps how
 (``exchange``) while its amount is the converted one.
 
-Configuration: ``BILL_AI_*`` (``minty_shared.ai.ReaderConfig``), its own switch and limits; the
-route to the model (``GEMINI_API_KEY``, ``EXPENSE_AI_ALLOW_DIRECT_API``, ``EXPENSE_AI_DIRECT_TIER``)
-is shared with the receipt reader.
+Configuration: the ``ai_policy`` row (owner, 2026-11-20) - ``invoice_reader_on`` is this reader's
+switch, and the models, the Vertex AI region, the timeout, the token budget, the thinking level
+and the largest invoice are shared with the receipt reader (``ai_allowance.Policy.reader``). The
+environment names only Vertex AI's project, ``GOOGLE_CLOUD_PROJECT``, with
+``GOOGLE_APPLICATION_CREDENTIALS``.
 """
 
 from __future__ import annotations
@@ -39,7 +41,6 @@ from core.exceptions import BillValidationError
 
 logger = logging.getLogger("minty-api")
 
-CONFIG = ai.ReaderConfig("BILL_AI")
 
 _MAX_AMOUNT = Decimal("10000000")
 _MAX_FOREIGN_AMOUNT = Decimal("999999999999")
@@ -203,7 +204,7 @@ def checked_invoice(uploads) -> tuple[bytes, str]:
 def reader_status(entity_id) -> dict:
     """The form's reader: whether "Read with AI" is offered, and the company's reads left
     (shared with Petty Cash; owner, 2026-11-18)."""
-    return ai_allowance.reader_status(CONFIG.enabled(), entity_id)
+    return ai_allowance.reader_status(ai_allowance.READER_INVOICE, entity_id)
 
 
 def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
@@ -211,12 +212,13 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
     PDF/JPEG/PNG by its bytes, at most 10 MB). ``suggestions`` is null on every failure; ``reader``
     is the allowance after this read. A read is reserved before the model is called and counts
     only if a model answered (``ai_allowance``); a refusal before that point uses nothing."""
-    if not CONFIG.enabled():
-        return {"suggestions": None, "reason": ai.REASON_DISABLED, "reader": {"enabled": False}}
     policy = ai_allowance.load_policy()
     if policy is None:
         return {"suggestions": None, "reason": ai.REASON_NOT_CONFIGURED, "reader": {"enabled": False}}
-    if len(data) > CONFIG.max_file_bytes():
+    config = policy.reader(ai_allowance.READER_INVOICE)
+    if not config.enabled:
+        return {"suggestions": None, "reason": ai.REASON_DISABLED, "reader": {"enabled": False}}
+    if len(data) > config.max_file_bytes:
         return _no_read(ai.REASON_FILE_TOO_LARGE, entity_id, policy)
     context = build_context(entity_id)
     if context is None:
@@ -231,14 +233,14 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
     try:
         document, document_mime = prepare_for_model(data, mime)
         instruction, prefix, aliases = prompt(context)
-        result = ai.read(document, document_mime, config=CONFIG, instruction=instruction,
+        result = ai.read(document, document_mime, config=config, instruction=instruction,
                          prefix_text=prefix, closing_text=ai_prompt.CLOSING, reply_model=Reading,
                          validate=lambda parsed: validate(parsed, context, aliases),
                          models=policy.models)
     finally:
         # Even if something here raised, the reserved read is closed (failed, so never counted).
         ai_allowance.finish(read_id, result)
-    ai.log_read(CONFIG, result, entity_id=entity_id, user_id=user_id)
+    ai.log_read(config, result, entity_id=entity_id, user_id=user_id)
     answer = result.answer()
     if answer["suggestions"]:
         # another currency: converted at Frankfurter's rate (owner, 2026-11-19) on the invoice's
