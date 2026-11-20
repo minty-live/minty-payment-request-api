@@ -20,7 +20,7 @@ a hash prefix of the key, never the key). The claims Minty puts in
 Minty sign-in still lives - the ask keeps it alive, so every call here is activity. Signed out
 of Minty, or 60 minutes without activity: 401, and the web hands the person over again on the
 same page. A token with no `sid` (minted before Phase 9) passes until it expires; accounts-api
-unreachable is logged at ERROR and the token honoured. There is **no token refresh** any more:
+unreachable is logged at ERROR and (minty-shared v0.9, owner 2026-11-19: "short grace, then refuse") the token is honoured only while that sign-in was confirmed alive in the last 5 minutes, then the request is refused 503 "Minty can't check your sign-in just now. Try again in a minute." (`SessionCheckUnavailableError`) - nobody is signed out by an outage, and a sign-in known to have ended stays ended (`{"detail": ...}`, `core/exceptions.py`). There is **no token refresh** any more:
 the 8-hour `POST /api/auth/token/refresh` (and `BILLING_TOKEN_HOURS`) is gone (404), so
 Payment Request signs out when Minty does. minty-accounts-api's authentication.md section 3.3
 is the whole design.

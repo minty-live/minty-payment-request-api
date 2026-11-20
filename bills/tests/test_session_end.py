@@ -62,6 +62,15 @@ def test_a_token_whose_sign_in_has_ended_is_401(client, member, hub_sessions):
     assert resp.json() == {"detail": "Unauthorized", "reason": "session_expired"}
 
 
+def test_accounts_api_unreachable_refuses_a_sign_in_not_confirmed_lately_with_a_503(client, member, hub_sessions):
+    # minty-shared v0.9 (owner, 2026-11-19): a short grace, then refuse - never a sign-out.
+    user, entity = member
+    hub_sessions.unreachable()
+    resp = _get(client, _token(user.id, entity.id, sid="s1"), entity.id)
+    assert resp.status_code == 503
+    assert resp.json() == {"detail": "Minty can't check your sign-in just now. Try again in a minute."}
+
+
 def test_an_expired_token_whose_sign_in_has_ended_says_so(client, member, hub_sessions):
     # The usual case after 60 idle minutes: the token ran out AND the sign-in ended.
     user, entity = member
