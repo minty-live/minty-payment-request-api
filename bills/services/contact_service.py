@@ -92,10 +92,15 @@ def _xero_to_bill_contact(contact: dict, entity_id: str, xero_org_id: str) -> di
     }
 
 
+def bill_contact_id(row: XeroContactSync) -> str:
+    """The id the bill form knows a supplier by: its Xero id, or - a supplier kept only in Minty
+    (Xero optional, 2026-11-10) has none - its row id."""
+    return row.xero_contact_id or str(row.id)
+
+
 def _db_to_bill_contact(row: XeroContactSync) -> dict:
     """Normalise a DB row to EntityBillContactOut shape."""
-    # a supplier kept only in Minty (Xero optional, 2026-11-10) has no Xero id: its row id
-    public = row.xero_contact_id or str(row.id)
+    public = bill_contact_id(row)
     return {
         "id": public,
         "entity_id": str(row.entity_id) if row.entity_id else None,  # uuid column since C5
@@ -565,8 +570,9 @@ def create_entity_bill_contact_in_xero(
     name: str,
 ) -> dict:
     """The company's supplier of ``name`` (owner, 2026-11-12: never blocked behind Xero, never a
-    duplicate): the one it has; else, live on Xero, Xero's of that name or a new one made there;
-    else its own Minty row. Returns the list items' shape (``EntityBillContactOut``)."""
+    duplicate): the one it has (live on Xero, one kept only in Minty is put in Xero too - C5); else,
+    live on Xero, Xero's of that name or a new one made there; else its own Minty row. Returns the
+    list items' shape (``EntityBillContactOut``)."""
     cleaned = (name or "").strip()
     if not cleaned:
         raise BillValidationError("I'll need a contact name here.")
@@ -576,9 +582,6 @@ def create_entity_bill_contact_in_xero(
     entity = Entity.objects.filter(id=entity_id).first()
     if not entity:
         raise BillValidationError("I couldn't find that company.")
-    held = held_contact(entity_id, cleaned)
-    if held is not None:
-        return _db_to_bill_contact(held)
     offline = minty_on_its_own(entity_id) or entity.status != "connected" or not entity.xero_org_id
 
     def token_for() -> str:
@@ -586,6 +589,22 @@ def create_entity_bill_contact_in_xero(
         if not access_token:
             raise BillValidationError("The Xero connection needs reconnecting before I can do that.")
         return access_token
+
+    held = held_contact(entity_id, cleaned)
+    if held is not None:
+        if held.xero_contact_id or offline:
+            return _db_to_bill_contact(held)
+        # the company's own supplier, kept only in Minty, added again while live: put in Xero too
+        # (owner's decisions doc C5, 2026-11-20, as onboarding-api's chart) - the same row, linked
+        # to Xero's contact of its name or one made there; another row holding it is the supplier
+        contact_id, _ = xero_contact_for(entity, token_for(), held.name)
+        holder = XeroContactSync.objects.filter(entity_id=entity_id, xero_contact_id=contact_id).first()
+        if holder is not None:
+            return _db_to_bill_contact(holder)
+        XeroContactSync.objects.filter(id=held.id).update(xero_contact_id=contact_id,
+                                                         xero_org_id=str(entity.xero_org_id))
+        held.xero_contact_id, held.xero_org_id = contact_id, str(entity.xero_org_id)
+        return _db_to_bill_contact(held)
 
     back = _brought_back(entity, cleaned, offline, token_for)
     if back is not None:

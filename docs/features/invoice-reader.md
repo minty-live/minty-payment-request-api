@@ -25,15 +25,17 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
   "Attach a file of 10 MB or less.", "Attach a PDF, JPEG or PNG file."). The attachment allowlist
   is wider (Word, Excel, HTML); the reader takes only what the model reads. Past those checks
   every outcome is 200 `{suggestions, reason}`, `suggestions` null on any failure.
-- `bills/services/invoice_reader.py` - the invoice's half: the instruction, the reply's shape
-  (`InvoiceSuggestion`), the lists sent with it and the check of the reply against them.
-  - **Suppliers**: the company's synced contacts of its current Xero organisation
-    (`contact_service.xero_org_scope`; rows with no org recorded count as legacy and are kept),
-    from the database only - never a live Xero call per read.
+- `bills/services/invoice_reader.py` - the invoice's half: the lists sent with it, the prompt over
+  them (`prompt`, below) and the check of the reply against them.
+  - **Suppliers**: the bill form's own list as the database holds it (2026-11-20, the owner's
+    decisions doc C3: one contact list) - active and not merged away, of the company's current Xero
+    organisation (`contact_service.xero_org_scope`; rows with no org recorded count as legacy and
+    are kept) or made in Minty (no Xero id: offered by its row id, `contact_service.bill_contact_id`).
+    From the database only - never a live Xero call per read.
   - **Accounts**: `entity_bill_account_xero` rows that are active, not deleted and of
     `BILL_SETTINGS_ACCOUNT_TYPES` - the form's dropdown - sent and matched by **code** (bills store
     codes; an account added by hand has no Xero id).
-  - **Checks**: a supplier id or account code is accepted only if it was sent; the amount is a
+  - **Checks**: a short id (supplier or account) is accepted only if it was sent; the amount is a
     positive decimal up to 10,000,000 in the company currency's own places (JPY 0); a date that is
     not `YYYY-MM-DD` is dropped, and so is a due date before the invoice date; the description is
     capped at 200 characters and an unmatched supplier name (`detected_name`, for the form's
@@ -47,12 +49,18 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
   `minty_shared.model_input` makes the small copy the model reads (an image capped at 2048 px and
   saved once as JPEG; a PDF's first page). The stored attachment is never changed.
 
-## The prompt update (owner, 2026-11-19)
+## The prompt (owner, 2026-11-20: "simple like this first")
 
-Two rules join the instruction, before its last line: `invoice_date_raw` - the issue date exactly as
-printed, character for character, never reformatted (handed on in the answer as untrusted text,
-stripped and capped at 40, never logged; no screen uses it yet) - and, when only "$" is printed, the
-currency inferred from the issuer's country.
+The owner's simple prompt, shared with the receipt reader (`minty_shared.ai_prompt`, minty-shared-py
+v0.10; minty-petty-cash-api's `docs/features/expense-ai.md` has the text): seven fields plus
+`due_date` for an invoice ("if only terms such as Net 30 are printed, add them to the invoice
+date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
+`validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
+
+**No confidence**: every value that passes the checks is filled into an empty field and marked for
+the person to check (band `medium`). The answer's shape to the web is unchanged (`supplier`,
+`account`, `amount`, `description`, `invoice_date`, `due_date`, `currency`, `entity_currency`); the
+2026-11-19 prompt's `invoice_date_raw` (no screen used it) and its '$' rule went with it.
 
 ## An invoice in another currency (owner, 2026-11-19)
 
@@ -129,15 +137,15 @@ minty-petty-cash-api's `python manage.py ai_policy`, never a release:
 | `ai_policy` (database) | the models (primary, backup) and the limit rules - above |
 | `BILL_AI_MODEL` | only when no models are given |
 | `BILL_AI_THINKING_LEVEL` (`low`), `BILL_AI_MAX_OUTPUT_TOKENS` (4096), `BILL_AI_TIMEOUT_S` (25, per model tried) | the call |
-| `BILL_AI_CONF_HIGH` (0.85), `BILL_AI_CONF_MEDIUM` (0.60) | the confidence bands: low is never filled |
+| `BILL_AI_CONF_HIGH`, `BILL_AI_CONF_MEDIUM` | unused since the simple prompt (no confidence is asked) |
 | `BILL_AI_MAX_FILE_MB` (10) | the model's size cap |
-| `GEMINI_API_KEY`, `EXPENSE_AI_ALLOW_DIRECT_API`, `EXPENSE_AI_DIRECT_TIER`, `EXPENSE_AI_USE_VERTEX`, `EXPENSE_AI_LOCATION`, `GOOGLE_CLOUD_PROJECT` | the route to the model and the tier assertion - shared with the receipt reader (direct Gemini API, paid tier; no residency commitment, so invoices may be processed outside Singapore) |
+| `GEMINI_API_KEY`, `EXPENSE_AI_ALLOW_DIRECT_API`, `EXPENSE_AI_DIRECT_TIER`, `EXPENSE_AI_USE_VERTEX`, `EXPENSE_AI_LOCATION`, `GOOGLE_CLOUD_PROJECT` | the route to the model and the tier assertion - shared with the receipt reader (direct Gemini API, FREE tier in both environments; Vertex AI, project `minty-515207` in `asia-southeast1`, chosen and deferred 2026-11-20) |
 
 ## Tests
 
 `bills/tests/test_invoice_reader.py` - the route (who may ask, the file refusals, the silent
 reasons, its own switch), the allowance (the last read refused, Petty Cash's reads counted here,
 the read recorded as Payment Request's with the model that answered after a failover, no policy =
-off), the context sent (only the form's accounts and the current org's
-suppliers, in a stable order), the reply checks, and the one log line; the model is a stand-in.
+off), the context sent (only the form's accounts and suppliers - Minty-made in, merged and retired
+out - by short ids in a stable order), the reply checks, and the one log line; the model is a stand-in.
 The engine's own cases are minty-shared-py's `tests/test_ai.py`.

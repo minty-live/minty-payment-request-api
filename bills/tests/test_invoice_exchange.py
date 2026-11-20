@@ -46,7 +46,7 @@ def _read(api_client, auth_headers, model, **reply):
 class TestTheRead:
     def test_an_invoice_in_another_currency_comes_back_converted_on_its_own_day(self, api_client, auth_headers,
                                                                                  model, rates):
-        s = _read(api_client, auth_headers, model, currency="USD", amount_value=12.34, invoice_date="2026-10-20")
+        s = _read(api_client, auth_headers, model, currency="USD", amount=12.34, date="2026-10-20")
         assert rates["asked"] == [("USD", "HKD", date(2026, 10, 20))]
         assert s["amount"]["value"] == "96.82" and s["amount"]["applied"] is True
         assert s["exchange"] == {
@@ -56,13 +56,13 @@ class TestTheRead:
         }
 
     def test_with_no_invoice_date_the_day_it_is_entered_is_used(self, api_client, auth_headers, model, rates):
-        s = _read(api_client, auth_headers, model, currency="USD", amount_value=12.34, invoice_date="")
+        s = _read(api_client, auth_headers, model, currency="USD", amount=12.34, date="")
         [(_, _, on)] = rates["asked"]
         assert on >= date(2026, 11, 19) and s["exchange"]["date_basis"] == "report_date"
 
     def test_no_rate_leaves_the_amount_empty_and_names_the_currency(self, api_client, auth_headers, model, rates):
         rates["answer"]["rate"] = None
-        s = _read(api_client, auth_headers, model, currency="TWD", amount_value=300)
+        s = _read(api_client, auth_headers, model, currency="TWD", amount=300)
         assert s["amount"]["value"] == "" and s["exchange_failed"] == {"currency": "TWD"}
 
     def test_the_company_s_own_currency_asks_for_no_rate(self, api_client, auth_headers, model, rates):
@@ -75,7 +75,7 @@ class TestTheRead:
                                           currency_name="Yen", symbol="¥", decimal_places=0, is_active=True)
         Entity.objects.filter(id=test_entity.id).update(currency_id=jpy.id)
         rates["answer"]["rate"] = fx.Rate(rate=Decimal("156.5"), date=RATE_DAY)
-        s = _read(api_client, auth_headers, model, currency="USD", amount_value=12.34)
+        s = _read(api_client, auth_headers, model, currency="USD", amount=12.34)
         assert s["exchange"]["original_amount"] == "12.34"  # not 12: the yen's places are the result's
         assert s["amount"]["value"] == "1931"
 

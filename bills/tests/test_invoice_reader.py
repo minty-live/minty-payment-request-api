@@ -12,7 +12,7 @@ import json
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 from minty_db.models import AiGrant, AiPolicy, AiRead, Entity, UserEntity, XeroContactSync
-from minty_shared import ai, fx
+from minty_shared import ai, ai_prompt, fx
 from minty_shared.django import ai_allowance
 
 from bills.models import EntityBillAccountXero
@@ -27,14 +27,13 @@ STATUS_URL = "/api/v1/bills/extract/status/"
 
 
 def _reply(**over) -> str:
+    """A reply to the owner's simple prompt plus the due date (2026-11-20), by the short ids sent
+    (``lists``: acc_01 = 310 Cost of Goods Sold, acc_02 = 400 Advertising; con_01 = con-abc ABC
+    Printing, con_02 = con-taxi Taxi Co)."""
     body = {
-        "supplier_contact_id": "con-abc", "supplier_name": "ABC Printing", "supplier_confidence": 0.93,
-        "account_code": "400", "account_confidence": 0.88,
-        "amount_value": 1200.5, "amount_confidence": 0.97,
-        "description_value": "Flyer printing", "description_confidence": 0.81,
-        "invoice_date": "2026-10-20", "invoice_date_confidence": 0.95,
-        "due_date": "2026-11-19", "due_date_confidence": 0.9,
-        "currency": "HKD",
+        "supplier_contact_id": "con_01", "supplier_name": "ABC Printing", "account_id": "acc_02",
+        "amount": 1200.5, "currency": "HKD", "date": "2026-10-20", "description": "Flyer printing",
+        "due_date": "2026-11-19",
     }
     body.update(over)
     return json.dumps(body)
@@ -132,7 +131,8 @@ def test_an_invoice_is_read_against_the_company_s_bill_lists(api_client, auth_he
     body = resp.json()
     assert body["reason"] is None
     s = body["suggestions"]
-    assert s["supplier"] == {"value": "ABC Printing", "confidence": 0.93, "band": "high", "applied": True,
+    # no confidence is asked (owner, 2026-11-20): every value is filled and marked to check
+    assert s["supplier"] == {"value": "ABC Printing", "confidence": 0.0, "band": "medium", "applied": True,
                              "contact_id": "con-abc"}
     assert (s["account"]["code"], s["account"]["value"]) == ("400", "400 - Advertising")
     assert s["amount"]["value"] == "1200.50"
@@ -141,7 +141,7 @@ def test_an_invoice_is_read_against_the_company_s_bill_lists(api_client, auth_he
     assert (s["currency"], s["entity_currency"]) == ("HKD", "HKD")
     [request] = model.requests
     assert request["input"][1]["type"] == "document"
-    assert request["system_instruction"] == invoice_reader.INSTRUCTION
+    assert request["system_instruction"] == ai_prompt.instruction("invoice")
 
 
 def test_the_prefix_carries_only_what_the_bill_form_offers(api_client, auth_headers, test_user_entity,
@@ -150,12 +150,32 @@ def test_the_prefix_carries_only_what_the_bill_form_offers(api_client, auth_head
 
     prefix = model.requests[0]["input"][0]["text"]
     assert "Name: Test Entity" in prefix and "Base currency: HKD" in prefix
-    assert "310 | Cost of Goods Sold" in prefix and "400 | Advertising" in prefix
-    assert prefix.index("310 |") < prefix.index("400 |")  # by code: a byte-stable prefix
-    for absent in ("410 |", "420 |", "200 |", "con-other"):  # off, deleted, not a bill type, old org
+    assert "acc_01 | 310 | Cost of Goods Sold" in prefix and "acc_02 | 400 | Advertising" in prefix
+    for absent in ("410 |", "420 |", "200 |", "Other Org"):  # off, deleted, not a bill type, old org
         assert absent not in prefix
-    assert "con-abc | ABC Printing" in prefix and "con-taxi | Taxi Co" in prefix  # no org = legacy, kept
-    assert "400" not in json.dumps(model.requests[0]["response_format"]["schema"])
+    assert "con_01 | ABC Printing" in prefix and "con_02 | Taxi Co" in prefix  # no org = legacy, kept
+    assert "con-abc" not in prefix  # short ids only
+    assert "acc_02" not in json.dumps(model.requests[0]["response_format"]["schema"])
+
+
+def test_one_contact_list_minty_made_in_merged_and_retired_out(api_client, auth_headers, test_user_entity,
+                                                              test_entity, lists, model):
+    """C3: the reader offers the bill form's own list - a supplier made in Minty (no Xero id) by
+    its row id; one merged away or retired never."""
+    mine = XeroContactSync.objects.create(entity_id=test_entity.id, xero_contact_id=None, name="Corner Shop",
+                                          xero_org_id="")
+    XeroContactSync.objects.create(entity_id=test_entity.id, xero_contact_id="con-gone", name="Gone Ltd",
+                                   xero_org_id=ORG, record_status="archived")
+    abc = XeroContactSync.objects.get(entity_id=test_entity.id, xero_contact_id="con-abc")
+    XeroContactSync.objects.create(entity_id=test_entity.id, xero_contact_id="con-dup", name="ABC Print",
+                                   xero_org_id=ORG, record_status="archived", merged_into=abc)
+    model.answer = FakeInteraction(_reply(supplier_contact_id="con_02"))
+
+    s = _extract(api_client, auth_headers).json()["suggestions"]
+
+    prefix = model.requests[0]["input"][0]["text"]
+    assert "con_02 | Corner Shop" in prefix and "Gone Ltd" not in prefix and "ABC Print\n" not in prefix
+    assert s["supplier"]["contact_id"] == str(mine.id) and s["supplier"]["value"] == "Corner Shop"
 
 
 @pytest.mark.parametrize("env, reason", [
@@ -291,24 +311,24 @@ def _read(api_client, auth_headers, model, **reply):
 @pytest.mark.usefixtures("test_user_entity", "lists")
 class TestTheReplyIsChecked:
     def test_a_supplier_not_sent_is_dropped_and_its_name_offered(self, api_client, auth_headers, model):
-        s, _ = _read(api_client, auth_headers, model, supplier_contact_id="con-other",
+        s, _ = _read(api_client, auth_headers, model, supplier_contact_id="con_09",
                      supplier_name="Other Org Ltd")
         assert s["supplier"]["contact_id"] == "" and s["supplier"]["applied"] is False
         assert s["supplier"]["detected_name"] == "Other Org Ltd"
         assert s["amount"]["applied"] is True  # one bad field is not a bad reply
 
-    def test_a_supplier_id_matches_whatever_its_case(self, api_client, auth_headers, model):
-        s, _ = _read(api_client, auth_headers, model, supplier_contact_id="CON-ABC")
+    def test_a_short_id_matches_whatever_its_case(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, supplier_contact_id=" CON_01 ")
         assert s["supplier"]["contact_id"] == "con-abc"
 
-    @pytest.mark.parametrize("code", ["410", "420", "200", "999"])
-    def test_an_account_the_form_does_not_offer_is_dropped(self, api_client, auth_headers, model, code):
-        s, _ = _read(api_client, auth_headers, model, account_code=code)
+    @pytest.mark.parametrize("account_id", ["acc_03", "400", "410", "con_01"])
+    def test_an_account_the_form_does_not_offer_is_dropped(self, api_client, auth_headers, model, account_id):
+        s, _ = _read(api_client, auth_headers, model, account_id=account_id)
         assert s["account"]["code"] == "" and s["account"]["applied"] is False
 
     @pytest.mark.parametrize("amount", [0, -50, 99_999_999_999])
     def test_an_out_of_range_amount_is_dropped(self, api_client, auth_headers, model, amount):
-        s, _ = _read(api_client, auth_headers, model, amount_value=amount)
+        s, _ = _read(api_client, auth_headers, model, amount=amount)
         assert s["amount"]["value"] == "" and s["amount"]["applied"] is False
 
     def test_the_amount_takes_the_currency_s_places(self, api_client, auth_headers, model, test_entity):
@@ -317,18 +337,18 @@ class TestTheReplyIsChecked:
         jpy = CurrencyInfo.objects.create(id="22222222-2222-2222-2222-222222222222", currency_code="JPY",
                                           currency_name="Yen", symbol="¥", decimal_places=0, is_active=True)
         Entity.objects.filter(id=test_entity.id).update(currency_id=jpy.id)
-        s, _ = _read(api_client, auth_headers, model, amount_value=1200.4, currency="JPY")
+        s, _ = _read(api_client, auth_headers, model, amount=1200.4, currency="JPY")
         assert s["amount"]["value"] == "1200"
         assert (s["currency"], s["entity_currency"]) == ("JPY", "JPY")
 
     def test_a_due_date_before_the_invoice_date_is_dropped(self, api_client, auth_headers, model):
-        s, _ = _read(api_client, auth_headers, model, invoice_date="2026-10-20", due_date="2026-10-01")
+        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="2026-10-01")
         assert s["invoice_date"]["value"] == "2026-10-20"
         assert s["due_date"]["value"] == "" and s["due_date"]["applied"] is False
 
     @pytest.mark.parametrize("value", ["20/10/2026", "2026-13-40", "soon"])
     def test_a_date_that_is_not_a_date_is_dropped(self, api_client, auth_headers, model, value):
-        s, _ = _read(api_client, auth_headers, model, invoice_date=value)
+        s, _ = _read(api_client, auth_headers, model, date=value)
         assert s["invoice_date"]["value"] == "" and s["invoice_date"]["applied"] is False
 
     def test_another_currency_is_handed_on_for_a_note_only(self, api_client, auth_headers, model):
@@ -338,28 +358,27 @@ class TestTheReplyIsChecked:
         assert s["currency"] == ""
 
     def test_the_description_is_capped_and_the_supplier_name_too(self, api_client, auth_headers, model):
-        s, _ = _read(api_client, auth_headers, model, description_value="x" * 5000,
+        s, _ = _read(api_client, auth_headers, model, description="x" * 5000,
                      supplier_contact_id="", supplier_name="z" * 400)
         assert len(s["description"]["value"]) == 200 and len(s["supplier"]["detected_name"]) == 100
 
-    def test_low_is_kept_for_the_log_but_not_prefilled_and_medium_is(self, api_client, auth_headers, model):
-        s, _ = _read(api_client, auth_headers, model, amount_confidence=0.2, due_date_confidence=0.7)
-        assert (s["amount"]["band"], s["amount"]["applied"]) == ("low", False)
-        assert (s["due_date"]["band"], s["due_date"]["applied"]) == ("medium", True)
+    def test_every_answered_field_is_filled_and_marked_to_check(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model)
+        for key in ("supplier", "account", "amount", "description", "invoice_date", "due_date"):
+            assert (s[key]["band"], s[key]["applied"]) == ("medium", True), key
 
     def test_nothing_usable_says_so(self, api_client, auth_headers, model):
-        low = {k: 0.1 for k in ("supplier_confidence", "account_confidence", "amount_confidence",
-                                "description_confidence", "invoice_date_confidence", "due_date_confidence")}
-        _, reason = _read(api_client, auth_headers, model, **low)
+        empty = {"supplier_contact_id": "", "supplier_name": "", "account_id": "", "amount": 0,
+                 "currency": "", "date": "", "description": "", "due_date": ""}
+        _, reason = _read(api_client, auth_headers, model, **empty)
         assert reason == "no_usable_field"
 
 
-def test_the_instruction_names_the_issuer_and_never_the_bill_number():
-    instruction = invoice_reader.INSTRUCTION
-    assert "the business that ISSUED the invoice, never the customer" in instruction
-    assert "supplier_name IS AN EXCEPTION" in instruction
+def test_the_instruction_is_the_owners_simple_prompt_with_the_due_date_and_no_bill_number():
+    instruction = ai_prompt.instruction("invoice")
+    assert "- due_date: ISO 8601 date (YYYY-MM-DD)" in instruction
     assert "bill number" not in instruction.lower() and "invoice number" not in instruction.lower()
-    assert "bill_number" not in invoice_reader.InvoiceSuggestion.model_fields
+    assert "bill_number" not in invoice_reader.Reading.model_fields
 
 
 # --- the allowance: one per company, shared with Petty Cash (owner, 2026-11-18) ------------------
@@ -414,30 +433,3 @@ def test_no_policy_turns_reading_off(api_client, auth_headers, model):
 
     assert api_client.get(STATUS_URL, **auth_headers).json() == {"enabled": False}
     assert _extract(api_client, auth_headers).json()["reason"] == "not_configured"
-
-
-# --- the owner's prompt update (2026-11-19): the raw issue date, currency from '$' ----------------
-
-LAST_LINE = "- Answer only with the JSON object described by the response schema."
-
-
-def test_the_instruction_adds_the_raw_date_and_currency_rules_before_its_last_line():
-    instruction = invoice_reader.INSTRUCTION
-    for rule in (
-        "- invoice_date_raw is the issue date exactly as printed on the invoice, character for "
-        "character. Do not reformat it.\n",
-        "- If only '$' is printed, infer the currency from the issuer's country.\n",
-    ):
-        assert rule in instruction
-        assert instruction.index(rule) < instruction.index(LAST_LINE)
-    assert "- currency is the ISO 4217 code of the invoice's amounts.\n" in instruction
-    assert instruction.endswith(LAST_LINE)
-    assert invoice_reader.InvoiceSuggestion.model_fields["invoice_date_raw"].default == ""
-
-
-@pytest.mark.usefixtures("test_user_entity", "lists")
-def test_the_raw_issue_date_is_handed_on_as_printed_and_capped(api_client, auth_headers, model):
-    s, _ = _read(api_client, auth_headers, model, invoice_date_raw="  20 Oct, 2026 ")
-    assert s["invoice_date_raw"] == "20 Oct, 2026"
-    s, _ = _read(api_client, auth_headers, model, invoice_date_raw="x" * 500)
-    assert len(s["invoice_date_raw"]) == 40

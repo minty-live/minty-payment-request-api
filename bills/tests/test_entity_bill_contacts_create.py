@@ -66,7 +66,7 @@ class TestEntityBillContactsCreate:
         test_user_entity,
     ):
         """Contacts are never blocked behind Xero (owner, 2026-11-12): a Minty row, no Xero call;
-        the next live sync puts it in Xero."""
+        publish puts it in Xero (owner's decisions doc C1)."""
         test_entity.status = "disconnected"
         test_entity.xero_org_id = None
         test_entity.save()
@@ -109,6 +109,41 @@ class TestEntityBillContactsCreate:
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-acme"
         assert XeroContactSync.objects.filter(entity_id=test_entity.id).count() == 1
         mock_post.assert_not_called()
+
+    def test_live_a_supplier_kept_only_in_minty_is_put_in_xero_too(
+        self,
+        db,
+        api_client,
+        auth_headers,
+        test_user,
+        test_entity,
+        test_user_entity,
+    ):
+        """C5 (2026-11-20, as onboarding-api's chart): the company's own supplier, added again while
+        connected, is linked to Xero's contact of its name - the same row, now in Xero."""
+        from minty_db.models import XeroContact
+
+        test_entity.status = "connected"
+        test_entity.xero_org_id = "org-abc"
+        test_entity.save()
+        give_xero_token(test_user, "fake-xero-token")
+        own = XeroContactSync.objects.create(entity_id=test_entity.id, xero_contact_id=None, name="Acme Ltd",
+                                             source="user")
+        XeroContact.objects.create(
+            entity_id=test_entity.id, xero_org_id="org-abc", xero_guid="cid-kept", name="ACME LTD", status="ACTIVE"
+        )
+        with patch("bills.services.contact_service.requests.post") as mock_post:
+            resp = api_client.post(
+                "/api/v1/entity-bill-contacts/",
+                data={"name": "acme  ltd"},
+                content_type="application/json",
+                **auth_headers,
+            )
+        assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-kept"
+        own.refresh_from_db()
+        assert (own.xero_contact_id, own.xero_org_id) == ("cid-kept", "org-abc")
+        assert XeroContactSync.objects.filter(entity_id=test_entity.id).count() == 1
+        mock_post.assert_not_called()  # linked to Xero's own: nothing made there
 
     def test_a_live_company_links_xeros_contact_of_that_name(
         self,
