@@ -28,6 +28,7 @@ import logging
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from django.conf import settings
 from minty_db.models import Entity, XeroContactSync
 from minty_shared import ai, ai_prompt, fx
 from minty_shared.django import ai_allowance
@@ -127,11 +128,16 @@ def validate(parsed: Reading, context: dict, aliases: ai_prompt.Aliases) -> dict
     else:
         if (parsed.supplier_contact_id or "").strip():
             logger.info("invoice reader: dropped a supplier id not in the sent list")
-        # The name read off the invoice, for the form's "+ Add ... as a new supplier" - never a
-        # contact (creating one stays the person's click). Untrusted text: stripped and capped
-        # at the form's own 100-character supplier name limit.
-        supplier = ai.checked("", {"contact_id": "",
-                                   "detected_name": (parsed.supplier_name or "").strip()[:100]})
+        # The name read off the invoice, with `new_supplier_token` - the name signed for this
+        # company - which saving the bill turns into its supplier (the user, 2026-11-23: a missing
+        # contact is added automatically, at save, never here; bill_service.take_reader_contact).
+        # Untrusted text: spaces collapsed and capped at the form's 100-character name limit.
+        name = " ".join((parsed.supplier_name or "").split())[:ai.NEW_SUPPLIER_MAX_NAME]
+        extra = {"contact_id": "", "detected_name": name}
+        if name:
+            extra["new_supplier_token"] = ai.new_supplier_token(settings.SECRET_KEY,
+                                                                context["entity"]["id"], name)
+        supplier = ai.checked("", extra)
 
     code = aliases.account(parsed.account_id) or ""
     if code in accounts:

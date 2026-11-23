@@ -283,6 +283,11 @@
             "title": "Line Items",
             "type": "array"
           },
+          "new_contact_token": {
+            "default": "",
+            "title": "New Contact Token",
+            "type": "string"
+          },
           "reference": {
             "default": "",
             "title": "Reference",
@@ -408,6 +413,11 @@
               }
             ],
             "title": "Line Items"
+          },
+          "new_contact_token": {
+            "default": "",
+            "title": "New Contact Token",
+            "type": "string"
           },
           "reference": {
             "anyOf": [
@@ -960,6 +970,11 @@
               }
             ],
             "title": "Line Items"
+          },
+          "new_contact_token": {
+            "default": "",
+            "title": "New Contact Token",
+            "type": "string"
           },
           "reference": {
             "anyOf": [

@@ -1,9 +1,10 @@
 import logging
 from decimal import Decimal
 
+from django.conf import settings
 from django.db import transaction
 from minty_db.models import Entity
-from minty_shared import fx
+from minty_shared import ai, fx
 from minty_shared.time import DEFAULT_ENTITY_TIMEZONE, country_timezone, today_in
 
 from bills.models import Audit, Bill, BillLineItem
@@ -128,6 +129,30 @@ def _build_change_detail(changes: list[str], fallback: str = "Bill updated") -> 
     return "; ".join(changes)
 
 
+READER_CONTACT_GONE = "The suggested supplier has expired. Choose a supplier from the list or add it."
+
+
+def take_reader_contact(entity_id, data, user_id: str) -> None:
+    """The supplier the invoice reader read and the company does not have, as the bill's (the user,
+    2026-11-23: a missing contact is added automatically when the bill is saved - draft, create,
+    submit or edit - even by someone who may not add contacts by hand; never by the read). Only a
+    name the reader signed for this company counts (``new_contact_token``, ``minty_shared.ai``); a
+    chosen ``xero_contact_id`` wins. The supplier is the company's of that name, else one added as
+    ``POST /entity-bill-contacts/`` adds it (C5). Called once the save's own checks have passed;
+    a later refusal (a reference already used) keeps the supplier, and the retry finds it."""
+    token = getattr(data, "new_contact_token", "") or ""
+    if not token or getattr(data, "xero_contact_id", None):
+        return
+    name = ai.new_supplier_name(settings.SECRET_KEY, token, entity_id)
+    if name is None:
+        raise BillValidationError(READER_CONTACT_GONE)
+    from bills.services.contact_service import create_entity_bill_contact_in_xero
+
+    row = create_entity_bill_contact_in_xero(str(entity_id), jwt_user_id=user_id, name=name)
+    data.xero_contact_id = row["xero_contact_id"]
+    data.contact = row["name"]
+
+
 def validate_for_submission(data, bill=None):
     errors = []
     contact = getattr(data, "contact", None) or (bill.contact if bill else None)
@@ -205,6 +230,7 @@ def _exchange_change(bill: Bill, data) -> dict | None:
 
 
 def save_bill_draft(data, user_id: str, entity_id: str) -> Bill:
+    take_reader_contact(entity_id, data, user_id)
     ask_about_duplicates(entity_id, data)
     currency_code = require_entity_currency_code(entity_id)
     exchange = _exchange(data, entity_id, data.amount)
@@ -322,6 +348,7 @@ def ask_about_duplicates(entity_id, data, bill: Bill | None = None) -> None:
 def update_bill_draft(bill: Bill, data, user_id: str) -> Bill:
     if bill.status == Bill.Status.VOIDED:
         raise BillValidationError("You can't edit a voided bill.")
+    take_reader_contact(bill.entity_id, data, user_id)
     ask_about_duplicates(bill.entity_id, data, bill)
     draft_fields = (
         "contact",
@@ -384,6 +411,7 @@ def update_bill_draft(bill: Bill, data, user_id: str) -> Bill:
 
 
 def create_bill(data, user_id: str, entity_id: str) -> Bill:
+    take_reader_contact(entity_id, data, user_id)
     ask_about_duplicates(entity_id, data)
     currency_code = require_entity_currency_code(entity_id)
     exchange = _exchange(data, entity_id, data.amount)
@@ -428,6 +456,7 @@ def create_bill(data, user_id: str, entity_id: str) -> Bill:
 
 def submit_bill(data, user_id: str, entity_id: str) -> Bill:
     validate_for_submission(data)
+    take_reader_contact(entity_id, data, user_id)
     ask_about_duplicates(entity_id, data)
     currency_code = require_entity_currency_code(entity_id)
     exchange = _exchange(data, entity_id, data.amount)
@@ -486,6 +515,7 @@ def update_bill(bill: Bill, data, user_id: str) -> Bill:
     )
     if getattr(data, "status", None) == "submitted" and bill.status != "submitted":
         validate_for_submission(data, bill=bill)
+    take_reader_contact(bill.entity_id, data, user_id)
     ask_about_duplicates(bill.entity_id, data, bill)
 
     if getattr(

@@ -327,6 +327,22 @@ class TestTheReplyIsChecked:
         assert s["supplier"]["detected_name"] == "Other Org Ltd"
         assert s["amount"]["applied"] is True  # one bad field is not a bad reply
 
+    def test_an_unmatched_supplier_comes_with_its_name_signed_for_this_company(
+        self, api_client, auth_headers, model, test_entity
+    ):
+        """The user, 2026-11-23: saving the bill adds it (bill_service.take_reader_contact)."""
+        from django.conf import settings
+        from minty_shared import ai
+
+        s, _ = _read(api_client, auth_headers, model, supplier_contact_id="", supplier_name=" Other   Org Ltd ")
+        token = s["supplier"]["new_supplier_token"]
+        assert ai.new_supplier_name(settings.SECRET_KEY, token, test_entity.id) == "Other Org Ltd"
+        assert ai.new_supplier_name(settings.SECRET_KEY, token, "another-company") is None
+
+    def test_a_matched_supplier_has_no_token(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model)
+        assert "new_supplier_token" not in s["supplier"]
+
     def test_a_short_id_matches_whatever_its_case(self, api_client, auth_headers, model):
         s, _ = _read(api_client, auth_headers, model, supplier_contact_id=" CON_01 ")
         assert s["supplier"]["contact_id"] == "con-abc"

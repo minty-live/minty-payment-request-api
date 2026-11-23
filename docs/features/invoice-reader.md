@@ -4,8 +4,9 @@ When an invoice is attached in minty-payment-request-web's new-bill form and the
 **Read invoice** (never on attaching it - owner, 2026-11-18), a vision model reads it
 and the form's empty fields are **filled as suggestions** the person checks (owner, 2026-11-04):
 the supplier, the invoice and due dates, the amount, the description and the account. Nothing is
-saved until Confirm or Save as Draft, a supplier is never created automatically, and the form
-stays usable while the read runs (or fails). The bill number is not read: it is Minty's own
+saved until Confirm or Save as Draft. A supplier the company does not have is added
+automatically, but only when the bill is saved, never by the read (the user, 2026-11-23; see *A
+supplier the company does not have* below). The form stays usable while the read runs (or fails). The bill number is not read: it is Minty's own
 `MBI...` reference.
 
 It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
@@ -38,8 +39,8 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
   - **Checks**: a short id (supplier or account) is accepted only if it was sent; the amount is a
     positive decimal up to 10,000,000 in the company currency's own places (JPY 0); a date that is
     not `YYYY-MM-DD` is dropped, and so is a due date before the invoice date; the description is
-    capped at 200 characters and an unmatched supplier name (`detected_name`, for the form's
-    "+ Add ... as a new supplier") at 100. A bill always takes the company's currency: an invoice
+    capped at 200 characters and an unmatched supplier name (`detected_name`, with its signed
+    `new_supplier_token`) at 100. A bill always takes the company's currency: an invoice
     in another one has its amount converted (below), kept as read until then - never rounded to
     the company's places first.
 - `minty_shared.ai` (minty-shared-py, extra `ai`) - the engine: the switch, the models and their
@@ -56,6 +57,28 @@ v0.10; minty-petty-cash-api's `docs/features/expense-ai.md` has the text): seven
 `due_date` for an invoice ("if only terms such as Net 30 are printed, add them to the invoice
 date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
 `validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
+Since minty-shared-py v0.13 (the user, 2026-11-23) the account is always the closest one in the
+list, even when the model is unsure, never "".
+
+## A supplier the company does not have (the user, 2026-11-23)
+
+An unmatched supplier comes back with `detected_name` and `new_supplier_token`, which is the name
+signed with `SECRET_KEY` for this company (`minty_shared.ai.new_supplier_token`, good for 7 days, the
+life of a local draft). The form sends it back as `new_contact_token` (on `BillCreateIn`,
+`BillDraftIn` and `BillUpdateIn`) with an empty `xero_contact_id`, on any of draft, create, submit
+or edit. `bill_service.take_reader_contact` then works like this:
+- it runs after the save's submission check;
+- it makes the name the bill's supplier through `contact_service.create_entity_bill_contact_in_xero`,
+  which uses the company's supplier of that name if it has one, otherwise adds one the way
+  `POST /entity-bill-contacts/` does (C5: made in Xero at once while live, the company's own row
+  offline);
+- there is no role check, by the user's rule. Adding a bill already needs Cashier, the same as
+  adding a contact.
+
+A token that has been altered, is for another company or has expired is 422 "The suggested supplier
+has expired. Choose a supplier from the list or add it." and nothing is saved. A chosen
+`xero_contact_id` wins over a token. A later refusal of the same save (a reference already used, a
+DUP1 question) keeps the supplier, and the retry finds it. Tests: `bills/tests/test_reader_contact.py`.
 
 **No confidence**: every value that passes the checks is filled into an empty field and marked for
 the person to check (band `medium`). The answer's shape to the web is unchanged (`supplier`,

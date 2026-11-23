@@ -156,6 +156,9 @@ class BillCreateIn(Schema):
     # how an AI-read amount in another currency was converted - the six fx.COLUMNS, checked
     # against the amount (owner, 2026-11-19); absent = none
     exchange: dict[str, str] | None = None
+    # the invoice reader's signed supplier name, added as the bill's supplier when no
+    # xero_contact_id is chosen (the user, 2026-11-23; bill_service.take_reader_contact)
+    new_contact_token: str = ""
 
 
 class BillDraftIn(Schema):
@@ -173,6 +176,8 @@ class BillDraftIn(Schema):
     confirm_duplicate: bool = False
     # a converted amount's six details; absent with a changed amount clears the bill's
     exchange: dict[str, str] | None = None
+    # the invoice reader's signed supplier name (bill_service.take_reader_contact)
+    new_contact_token: str = ""
 
 
 class ReturnBillIn(Schema):
@@ -195,6 +200,8 @@ class BillUpdateIn(Schema):
     confirm_duplicate: bool = False
     # a converted amount's six details; absent with a changed amount clears the bill's
     exchange: dict[str, str] | None = None
+    # the invoice reader's signed supplier name (bill_service.take_reader_contact)
+    new_contact_token: str = ""
 
 
 class BillOut(Schema):
