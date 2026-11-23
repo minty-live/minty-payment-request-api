@@ -21,7 +21,7 @@ token side in [authentication.md](authentication.md).
    the new org (`_reset_for_new_org`) and published afresh. Otherwise a second publish
    into the same org would duplicate the invoice.
 3. **Contact heal** — a bill saved without `xero_contact_id` gets it from the cached
-   contact with the same name (case and extra spaces ignored); a Minty-only supplier is found in
+   contact with the same name (case, spaces and punctuation ignored); a Minty-only supplier is found in
    Xero by name or made there as a supplier first (`xero_contact_for`, owner's decisions doc C1,
    2026-11-19).
 4. **Lock dates** — `fetch_lock_dates` reads the organisation's period and end-of-year

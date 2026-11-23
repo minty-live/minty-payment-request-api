@@ -73,11 +73,14 @@ exact-match rules: `bills/tests/test_contact_*.py`. One cache row per Xero conta
 and the insert, that row is the contact (`bills/tests/test_xero_unique_keys.py`).
 
 **Never blocked behind Xero, never a duplicate (owner, 2026-11-12).** `POST` returns the
-company's active supplier of that name when it has one (case and inner spaces ignored); with no
+company's active supplier of that name when it has one (case, spaces and punctuation ignored -
+`minty_shared.names`, the user 2026-11-23: "7 Eleven" is "7-Eleven"), looked for - like a deleted
+one brought back - only among its list's contacts (`xero_org_scope`: never one of an organisation
+it was connected to before); with no
 live connection (not connected, or still keeping its books in Minty) the supplier is the company's
 own row, no Xero id; live, Xero's contact of that name is linked - from the stored copies
-(`xero_contact`), then a live `GET /Contacts?searchTerm=` narrowed to the exact name (case and
-extra spaces ignored) - before one is made there as a supplier (`IsSupplier: true`;
+(`xero_contact`), then a live `GET /Contacts?searchTerm=` for the name's longest word (Xero's
+search is a substring search) narrowed to the same name - before one is made there as a supplier (`IsSupplier: true`;
 `xero_contact_for`; owner's decisions doc C5, 2026-11-19). `GET` lists those Minty-only suppliers
 beside the live ones, and leaves archived and merged rows out. **Publish puts a Minty-only supplier
 in Xero first** (`xero_publish_service`): it used to send the row's own id as the `ContactID`

@@ -60,6 +60,15 @@ date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`
 Since minty-shared-py v0.13 (the user, 2026-11-23) the account is always the closest one in the
 list, even when the model is unsure, never "".
 
+## The supplier (the user, 2026-11-23)
+
+The prompt (minty-shared-py v0.14) asks for the same **or a similar** supplier from the list
+(another spelling, language or branch of the same business), "" only if none is. A supplier the
+model leaves out (no id, or an id not sent) whose printed name is a list supplier's name - case,
+spaces and punctuation ignored (`minty_shared.names`) - is that supplier, never offered as a new
+one. Every answer with a printed name carries it as `read_name` (spaces collapsed, at most 100
+characters), so the form can show it beside a "similar" pick.
+
 ## A supplier the company does not have (the user, 2026-11-23)
 
 An unmatched supplier comes back with `detected_name` and `new_supplier_token`, which is the name

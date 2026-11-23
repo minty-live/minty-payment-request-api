@@ -30,7 +30,7 @@ from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
 from minty_db.models import Entity, XeroContactSync
-from minty_shared import ai, ai_prompt, fx
+from minty_shared import ai, ai_prompt, fx, names
 from minty_shared.django import ai_allowance
 from minty_shared.model_input import prepare_for_model
 from minty_shared.time import DEFAULT_ENTITY_TIMEZONE, country_timezone, today_in
@@ -121,19 +121,26 @@ def validate(parsed: Reading, context: dict, aliases: ai_prompt.Aliases) -> dict
     accounts = {a["code"]: a for a in context["accounts"]}
     contacts = {c["id"]: c for c in context["contacts"]}
 
+    # The name as printed (untrusted text: spaces collapsed, capped at the form's 100-character
+    # name limit) - shown beside the chosen supplier so a wrong "similar" pick is easy to spot (the
+    # user, 2026-11-23).
+    name = " ".join((parsed.supplier_name or "").split())[:ai.NEW_SUPPLIER_MAX_NAME]
+    read = {"read_name": name} if name else {}
     supplier_id = aliases.supplier(parsed.supplier_contact_id) or ""
-    if supplier_id in contacts:
-        contact = contacts[supplier_id]
-        supplier = ai.checked(contact["name"], {"contact_id": contact["id"]})
-    else:
+    if supplier_id not in contacts:
         if (parsed.supplier_contact_id or "").strip():
             logger.info("invoice reader: dropped a supplier id not in the sent list")
+        # the list's supplier of the same name (case, spaces, punctuation ignored) is that supplier,
+        # never offered as a new one (the user, 2026-11-23)
+        supplier_id = next((c["id"] for c in context["contacts"] if names.same_name(c["name"], name)), "")
+    if supplier_id:
+        contact = contacts[supplier_id]
+        supplier = ai.checked(contact["name"], {"contact_id": contact["id"], **read})
+    else:
         # The name read off the invoice, with `new_supplier_token` - the name signed for this
         # company - which saving the bill turns into its supplier (the user, 2026-11-23: a missing
         # contact is added automatically, at save, never here; bill_service.take_reader_contact).
-        # Untrusted text: spaces collapsed and capped at the form's 100-character name limit.
-        name = " ".join((parsed.supplier_name or "").split())[:ai.NEW_SUPPLIER_MAX_NAME]
-        extra = {"contact_id": "", "detected_name": name}
+        extra = {"contact_id": "", "detected_name": name, **read}
         if name:
             extra["new_supplier_token"] = ai.new_supplier_token(settings.SECRET_KEY,
                                                                 context["entity"]["id"], name)

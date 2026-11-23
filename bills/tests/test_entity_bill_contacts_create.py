@@ -203,6 +203,105 @@ class TestEntityBillContactsCreate:
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-acme"
         mock_post.assert_not_called()
 
+    def test_a_name_typed_another_way_is_that_supplier(
+        self,
+        db,
+        api_client,
+        auth_headers,
+        test_user,
+        test_entity,
+        test_user_entity,
+    ):
+        """The user, 2026-11-23: case, spaces and punctuation ignored ("7 Eleven" is "7-Eleven")."""
+        test_entity.status = "connected"
+        test_entity.xero_org_id = "org-abc"
+        test_entity.save()
+        give_xero_token(test_user, "fake-xero-token")
+        XeroContactSync.objects.create(
+            entity_id=test_entity.id, xero_contact_id="cid-7", xero_org_id="org-abc", name="7-Eleven"
+        )
+        with patch("bills.services.contact_service.requests.get") as mock_get, patch(
+            "bills.services.contact_service.requests.post"
+        ) as mock_post:
+            resp = api_client.post(
+                "/api/v1/entity-bill-contacts/",
+                data={"name": "7 eleven"},
+                content_type="application/json",
+                **auth_headers,
+            )
+        assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-7"
+        assert XeroContactSync.objects.filter(entity_id=test_entity.id).count() == 1
+        mock_get.assert_not_called()
+        mock_post.assert_not_called()
+
+    def test_xeros_contact_typed_another_way_is_found_never_a_twin(
+        self,
+        db,
+        api_client,
+        auth_headers,
+        test_user,
+        test_entity,
+        test_user_entity,
+    ):
+        """Xero's search is a substring search: asked for the longest word, the same name counts."""
+        test_entity.status = "connected"
+        test_entity.xero_org_id = "org-abc"
+        test_entity.save()
+        give_xero_token(test_user, "fake-xero-token")
+        found = [
+            {"ContactID": "cid-7c", "Name": "7-Eleven Central", "ContactStatus": "ACTIVE"},
+            {"ContactID": "cid-7", "Name": "7-ELEVEN", "ContactStatus": "ACTIVE"},
+        ]
+        with patch(
+            "bills.services.contact_service.requests.get", return_value=_search_answer(found)
+        ) as mock_get, patch("bills.services.contact_service.requests.post") as mock_post:
+            resp = api_client.post(
+                "/api/v1/entity-bill-contacts/",
+                data={"name": "7 Eleven"},
+                content_type="application/json",
+                **auth_headers,
+            )
+        assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-7"
+        assert mock_get.call_args[1]["params"]["searchTerm"] == "Eleven"
+        mock_post.assert_not_called()
+
+    @pytest.mark.parametrize("status", ["active", "archived"])
+    def test_a_name_only_another_organisation_holds_is_a_new_supplier_here(
+        self,
+        db,
+        api_client,
+        auth_headers,
+        test_user,
+        test_entity,
+        test_user_entity,
+        status,
+    ):
+        """The user, 2026-11-23: never a contact of an organisation the company was connected to
+        before - it is on no list here (``xero_org_scope``), nor brought back if deleted."""
+        test_entity.status = "connected"
+        test_entity.xero_org_id = "org-abc"
+        test_entity.save()
+        give_xero_token(test_user, "fake-xero-token")
+        old = XeroContactSync.objects.create(
+            entity_id=test_entity.id, xero_contact_id="cid-old", xero_org_id="org-old", name="7-Eleven",
+            record_status=status,
+        )
+        made = MagicMock()
+        made.status_code = 200
+        made.json.return_value = {"Contacts": [{"ContactID": "cid-new", "Name": "7 Eleven"}]}
+        with patch(
+            "bills.services.contact_service.requests.get", return_value=_search_answer([])
+        ), patch("bills.services.contact_service.requests.post", return_value=made):
+            resp = api_client.post(
+                "/api/v1/entity-bill-contacts/",
+                data={"name": "7 Eleven"},
+                content_type="application/json",
+                **auth_headers,
+            )
+        assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-new"
+        old.refresh_from_db()
+        assert (old.xero_org_id, old.record_status) == ("org-old", status)
+
     def test_creates_contact_and_db_row(
         self,
         db,
@@ -244,7 +343,7 @@ class TestEntityBillContactsCreate:
         assert body["name"] == "Fresh Supplier Co"
         assert body["entity_id"] == str(test_entity.id)
         # owner's decisions doc C5 (2026-11-19): Xero searched for the name, then made as a supplier
-        assert mock_get.call_args[1]["params"]["searchTerm"] == "Fresh Supplier Co"
+        assert mock_get.call_args[1]["params"]["searchTerm"] == "Supplier"  # its longest word
         mock_post.assert_called_once()
         assert mock_post.call_args[1]["json"] == {
             "Contacts": [{"Name": "Fresh Supplier Co", "IsCustomer": False, "IsSupplier": True}]

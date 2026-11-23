@@ -24,6 +24,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
 from minty_db.models import Entity, XeroContact, XeroContactSync
+from minty_shared import names
 
 from bills.services.books import minty_on_its_own
 from bills.services.xero_token_service import resolve_xero_access_token_for_entity
@@ -293,19 +294,18 @@ def get_entity_bill_contacts(
     return contacts
 
 
-def _key(name) -> str:
-    return " ".join(str(name or "").split()).lower()
-
-
 def held_contact(entity_id: str, name: str) -> XeroContactSync | None:
-    """The company's active supplier of that name (case and inner spaces ignored), if any."""
+    """The company's active supplier of that name (case, spaces and punctuation ignored -
+    ``minty_shared.names``, the user 2026-11-23) on its list - never one of an organisation it was
+    connected to before (``xero_org_scope``) - if any."""
+    org = Entity.objects.filter(id=entity_id).values_list("xero_org_id", flat=True).first()
     return next(
         (
             row
             for row in XeroContactSync.objects.filter(
                 entity_id=entity_id, record_status="active", merged_into__isnull=True
-            )
-            if _key(row.name) == _key(name)
+            ).filter(xero_org_scope(org))
+            if names.same_name(row.name, name)
         ),
         None,
     )
@@ -339,16 +339,19 @@ def _xero_refusal(resp) -> str:
 
 
 def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> str | None:
-    """Xero's active contact named ``name`` (case and extra spaces ignored) the company doesn't hold
-    yet, searched live: ``GET /Contacts?searchTerm=`` is Xero's loose case-insensitive search (the
-    accounting API spec's ``getContacts``), so only an exact name counts. Raises
-    ``BillValidationError`` when Xero can't be asked."""
+    """Xero's active contact named ``name`` (case, spaces and punctuation ignored) the company
+    doesn't hold yet, searched live: ``GET /Contacts?searchTerm=`` is Xero's loose case-insensitive
+    substring search (the accounting API spec's ``getContacts``), so it is asked for the name's
+    longest word (``names.search_term``: "7 Eleven" finds "7-Eleven") and only the same name counts.
+    Raises ``BillValidationError`` when Xero can't be asked."""
+    if not names.name_key(name):
+        return None
     headers = {"Authorization": f"Bearer {access_token}", "Xero-Tenant-Id": xero_org_id, "Accept": "application/json"}
     try:
         resp = requests.get(
             f"{_xero_api_base()}/Contacts",
             headers=headers,
-            params={"searchTerm": " ".join(name.split()), "page": 1},
+            params={"searchTerm": names.search_term(name), "page": 1},
             timeout=30,
         )
     except requests.RequestException as exc:
@@ -366,7 +369,7 @@ def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> s
             c["ContactID"]
             for c in contacts
             if c.get("ContactID")
-            and _key(c.get("Name")) == _key(name)
+            and names.same_name(c.get("Name"), name)
             and str(c.get("ContactStatus") or "ACTIVE").upper() == "ACTIVE"
             and c["ContactID"] not in held
         ),
@@ -389,7 +392,7 @@ def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str,
         (
             c
             for c in XeroContact.objects.filter(entity_id=entity.id, xero_org_id=xero_org_id, status="ACTIVE")
-            if _key(c.name) == _key(name) and c.xero_guid not in held
+            if names.same_name(c.name, name) and c.xero_guid not in held
         ),
         None,
     )
@@ -519,8 +522,8 @@ def _brought_back(entity: Entity, name: str, offline: bool, token_for) -> XeroCo
             row
             for row in XeroContactSync.objects.filter(
                 entity_id=entity.id, record_status="archived", merged_into__isnull=True
-            )
-            if _key(row.name) == _key(name)
+            ).filter(xero_org_scope(entity.xero_org_id))
+            if names.same_name(row.name, name)
         ),
         key=lambda row: not row.xero_contact_id,
     )
@@ -545,7 +548,7 @@ def _brought_back(entity: Entity, name: str, offline: bool, token_for) -> XeroCo
             for c in XeroContact.objects.filter(entity_id=entity.id, xero_org_id=str(entity.xero_org_id)).exclude(
                 status="ACTIVE"
             )
-            if _key(c.name) == _key(name) and c.xero_guid not in held
+            if names.same_name(c.name, name) and c.xero_guid not in held
         ),
         None,
     )

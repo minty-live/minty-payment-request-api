@@ -16,7 +16,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from minty_db.models import Entity, XeroContactSync
-from minty_shared import logctx
+from minty_shared import logctx, names
 
 from bills.models import (
     Audit,
@@ -152,16 +152,14 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
 
     # Heal missing xero_contact_id before building any payload
     if not bill.xero_contact_id:
-        # the same name rule as everywhere (case and extra spaces ignored)
-        from bills.services.contact_service import _key
-
+        # the same name rule as everywhere (case, spaces and punctuation ignored)
         sync_row = next(
             (
                 row
                 for row in XeroContactSync.objects.filter(entity_id=bill.entity_id).filter(
                     xero_org_scope(xero_org_id)
                 )
-                if row.xero_contact_id and _key(row.name) == _key(bill.contact)
+                if row.xero_contact_id and names.same_name(row.name, bill.contact)
             ),
             None,
         )

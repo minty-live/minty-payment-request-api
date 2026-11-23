@@ -140,7 +140,7 @@ def test_an_invoice_is_read_against_the_company_s_bill_lists(api_client, auth_he
     s = body["suggestions"]
     # no confidence is asked (owner, 2026-11-20): every value is filled and marked to check
     assert s["supplier"] == {"value": "ABC Printing", "confidence": 0.0, "band": "medium", "applied": True,
-                             "contact_id": "con-abc"}
+                             "contact_id": "con-abc", "read_name": "ABC Printing"}
     assert (s["account"]["code"], s["account"]["value"]) == ("400", "400 - Advertising")
     assert s["amount"]["value"] == "1200.50"
     assert (s["invoice_date"]["value"], s["due_date"]["value"]) == ("2026-10-20", "2026-11-19")
@@ -338,6 +338,24 @@ class TestTheReplyIsChecked:
         token = s["supplier"]["new_supplier_token"]
         assert ai.new_supplier_name(settings.SECRET_KEY, token, test_entity.id) == "Other Org Ltd"
         assert ai.new_supplier_name(settings.SECRET_KEY, token, "another-company") is None
+
+    @pytest.mark.parametrize("answered", ["", "con_09"], ids=["no-id", "an-id-not-sent"])
+    def test_the_same_name_in_the_list_is_that_supplier_however_it_is_typed(
+        self, api_client, auth_headers, model, answered
+    ):
+        """The user, 2026-11-23: a supplier the list has is chosen, never offered as a new one."""
+        s, _ = _read(api_client, auth_headers, model, supplier_contact_id=answered, supplier_name="abc-PRINTING")
+        assert (s["supplier"]["contact_id"], s["supplier"]["value"]) == ("con-abc", "ABC Printing")
+        assert "detected_name" not in s["supplier"] and "new_supplier_token" not in s["supplier"]
+
+    def test_the_name_as_printed_comes_with_the_chosen_supplier(self, api_client, auth_headers, model):
+        """The user, 2026-11-23: shown beside a "similar" pick ("滬江 -> Wu Kong")."""
+        s, _ = _read(api_client, auth_headers, model, supplier_name=" ABC  Printing (HK) ")
+        assert (s["supplier"]["contact_id"], s["supplier"]["read_name"]) == ("con-abc", "ABC Printing (HK)")
+
+    def test_no_name_printed_means_no_read_name(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, supplier_name="  ")
+        assert "read_name" not in s["supplier"]
 
     def test_a_matched_supplier_has_no_token(self, api_client, auth_headers, model):
         s, _ = _read(api_client, auth_headers, model)
