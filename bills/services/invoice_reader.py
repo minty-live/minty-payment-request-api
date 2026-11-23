@@ -16,7 +16,7 @@ Frankfurter's rate (``minty_shared.fx``, owner 2026-11-19), and the bill keeps h
 (``exchange``) while its amount is the converted one.
 
 Configuration: the ``ai_policy`` row (owner, 2026-11-20) - ``invoice_reader_on`` is this reader's
-switch, and the models, the Vertex AI region, the timeout, the token budget, the thinking level
+switch, and the models, the timeout, the token budget, the thinking level
 and the largest invoice are shared with the receipt reader (``ai_allowance.Policy.reader``). The
 environment names only Vertex AI's project, ``GOOGLE_CLOUD_PROJECT``, with
 ``GOOGLE_APPLICATION_CREDENTIALS``.

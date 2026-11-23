@@ -142,7 +142,6 @@ serves), authenticated by the `minty-ai` service account's key file. The direct 
 | `ai_policy` | `primary_model`, `backup_model` | the models tried, in order - above |
 | `ai_policy` | `timeout_s` (25, per model tried), `max_output_tokens` (4096, thinking included), `thinking_level` (`low`) | the call - shared with the receipt reader |
 | `ai_policy` | `max_file_mb` (10) | the model's size cap |
-| `ai_policy` | `location` (`asia-southeast1`) | the Vertex AI region - it decides which models exist, so change the models with it (`--location`) |
 | environment | `GOOGLE_CLOUD_PROJECT` | Vertex AI's project (`minty-515207`); without it, no call is made (`not_configured`) |
 | environment | `GOOGLE_APPLICATION_CREDENTIALS` | the service account's key file (on Render a secret file) |
 

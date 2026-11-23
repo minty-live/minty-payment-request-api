@@ -85,7 +85,7 @@ def _parts(request) -> list:
 @pytest.fixture
 def model(monkeypatch, ai_policy) -> FakeModel:
     fake = FakeModel()
-    monkeypatch.setattr(ai, "get_client", lambda timeout_s, region: fake)
+    monkeypatch.setattr(ai, "get_client", lambda timeout_s: fake)
     # no test reaches Frankfurter: another currency gets no rate unless a test stands one in
     monkeypatch.setattr(fx, "frankfurter_rate", lambda base, quote, on: None)
     monkeypatch.setattr(ai.time, "sleep", lambda _s: None)
