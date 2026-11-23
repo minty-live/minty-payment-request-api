@@ -25,7 +25,8 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
   it.", "Attach one invoice at a time.", "That file is empty. Attach the invoice again.",
   "Attach a file of 10 MB or less.", "Attach a PDF, JPEG or PNG file."). The attachment allowlist
   is wider (Word, Excel, HTML); the reader takes only what the model reads. Past those checks
-  every outcome is 200 `{suggestions, reason}`, `suggestions` null on any failure.
+  every outcome is 200 `{suggestions, reason, reader}`, `suggestions` null on any failure or
+  refusal (below).
 - `bills/services/invoice_reader.py` - the invoice's half: the lists sent with it, the prompt over
   them (`prompt`, below) and the check of the reply against them.
   - **Suppliers**: the bill form's own list as the database holds it (2026-11-20, the owner's
@@ -59,6 +60,20 @@ date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`
 `validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
 Since minty-shared-py v0.13 (the user, 2026-11-23) the account is always the closest one in the
 list, even when the model is unsure, never "".
+
+## Evidence (owner's launch decisions, 2026-11-23)
+
+The basis is IRD's "A Guide to Keeping Business Records": a record of a payment shows what was paid
+for, and when the document doesn't list it, the description is the "additional notation"
+(minty-petty-cash-api's `docs/features/expense-ai.md` has the full note). minty-shared-py v0.15:
+- **`date`** (the invoice date) is a printed billing period's last day, otherwise the issue date;
+  the exchange rate is that same day's.
+- **`description`** is inferred from the supplier and context when no items are listed, with
+  `account_id` chosen to match; an inferred one comes in the `low` band with `inferred: true`, so
+  the page asks for a closer check. `""` only when it can't be inferred.
+- **Refusals** (`ai.evidence_refusal`, after the read, before any rate): more than one invoice in
+  the file (`document_count`) answers `{suggestions: null, reason: "several_documents"}`, then an
+  empty description `reason: "no_description"`. Either still counts as a read (a model answered).
 
 ## The supplier (the user, 2026-11-23)
 
@@ -158,15 +173,14 @@ minty-petty-cash-api's `python manage.py ai_policy`, never a release:
   after a spent grant reads 100%). Used up, the route answers `limit_reached` without asking the
   model and the page disables the button.
 - The in-process `RateLimiter` and `*_RATE_USER_PER_MIN`/`*_RATE_ENTITY_PER_HOUR` are gone (replaced).
-- **Production:** Vertex AI in `asia-southeast1` (owner, 2026-11-20; below) once minty-shared v0.11
-  is released; until then production still uses the direct Gemini API on the FREE tier, which does
-  not meet "approved providers only".
+- **Production:** Vertex AI on its `global` endpoint (minty-shared v0.12; below).
 
 ## Configuration
 
-The route is Vertex AI only (owner, 2026-11-20; minty-shared v0.11): `models.generate_content` in
-`asia-southeast1` for project `minty-515207`, the model `gemini-3.5-flash` (the one Singapore
-serves), authenticated by the `minty-ai` service account's key file. The direct Gemini API is gone.
+The route is Vertex AI only (owner, 2026-11-20; minty-shared v0.11): `models.generate_content` on
+the `global` endpoint since minty-shared v0.12 (owner, 2026-11-23: no region setting; the policy's
+`gemini-3.5-flash-lite` is not served in `asia-southeast1`) for project `minty-515207`,
+authenticated by the `minty-ai` service account's key file. The direct Gemini API is gone.
 
 | Where | Setting | Meaning |
 |---|---|---|

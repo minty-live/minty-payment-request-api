@@ -411,11 +411,42 @@ class TestTheReplyIsChecked:
         for key in ("supplier", "account", "amount", "description", "invoice_date", "due_date"):
             assert (s[key]["band"], s[key]["applied"]) == ("medium", True), key
 
-    def test_nothing_usable_says_so(self, api_client, auth_headers, model):
+    def test_nothing_usable_is_not_enough_evidence(self, api_client, auth_headers, model):
+        # owner, 2026-11-23: nothing describes what was paid for, so the page says why
         empty = {"supplier_contact_id": "", "supplier_name": "", "account_id": "", "amount": 0,
                  "currency": "", "date": "", "description": "", "due_date": ""}
-        _, reason = _read(api_client, auth_headers, model, **empty)
-        assert reason == "no_usable_field"
+        assert _read(api_client, auth_headers, model, **empty) == (None, "no_description")
+
+
+@pytest.mark.usefixtures("test_user_entity", "lists")
+class TestTheEvidenceRule:
+    """The owner's launch decisions (2026-11-23, after IRD's "A Guide to Keeping Business
+    Records"): one document per file, and what was paid for described or inferred."""
+
+    def test_an_invoice_with_no_description_is_not_enough_evidence(self, api_client, auth_headers, model):
+        assert _read(api_client, auth_headers, model, description=" ") == (None, "no_description")
+
+    def test_several_invoices_in_one_file_are_refused_before_anything_else(self, api_client, auth_headers,
+                                                                          model):
+        refused = _read(api_client, auth_headers, model, document_count=2, description="")
+        assert refused == (None, "several_documents")
+
+    def test_an_inferred_description_is_filled_and_marked_to_check_harder(self, api_client, auth_headers,
+                                                                          model):
+        s, reason = _read(api_client, auth_headers, model, description="Software subscription",
+                          description_inferred=True)
+        assert reason is None and s["description"]["applied"] is True
+        assert (s["description"]["band"], s["description"]["inferred"]) == ("low", True)
+
+    def test_a_printed_description_stays_in_the_usual_band(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model)
+        assert (s["description"]["band"], s["description"]["inferred"]) == ("medium", False)
+
+    def test_a_refused_read_still_counts(self, api_client, auth_headers, model):
+        model.answer = FakeResponse(_reply(document_count=3))
+        body = _extract(api_client, auth_headers).json()
+        assert body["reason"] == "several_documents"
+        assert AiRead.objects.get().status == "ok"  # answered, so it counts (a failed read never does)
 
 
 def test_the_instruction_is_the_owners_simple_prompt_with_the_due_date_and_no_bill_number():

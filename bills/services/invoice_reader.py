@@ -181,12 +181,21 @@ def validate(parsed: Reading, context: dict, aliases: ai_prompt.Aliases) -> dict
         "supplier": supplier,
         "account": account_field,
         "amount": ai.checked(amount_value),
-        "description": ai.checked((parsed.description or "").strip()[:_MAX_DESCRIPTION]),
+        "description": _description(parsed),
         "invoice_date": ai.checked(invoice_date),
         "due_date": ai.checked(due_date),
         "currency": currency,
         "entity_currency": context["entity"]["currency"],
+        "document_count": parsed.document_count,
     }
+
+
+def _description(parsed: Reading) -> dict:
+    """What was bought (owner, 2026-11-23): inferred from the supplier and context when the
+    invoice lists no items - then in the ``low`` band, so the page asks for a closer check."""
+    text = (parsed.description or "").strip()[:_MAX_DESCRIPTION]
+    inferred = bool(text) and parsed.description_inferred
+    return ai.checked(text, {"inferred": inferred, **({"band": "low"} if inferred else {})})
 
 
 MAX_INVOICE_BYTES = 10 * 1024 * 1024
@@ -255,7 +264,13 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
         ai_allowance.finish(read_id, result)
     ai.log_read(config, result, entity_id=entity_id, user_id=user_id)
     answer = result.answer()
-    if answer["suggestions"]:
+    refusal = ai.evidence_refusal(answer["suggestions"]) if answer["suggestions"] else None
+    if refusal:
+        # several invoices in the file, or nothing describes what was paid for (owner, 2026-11-23):
+        # nothing is filled and the page says why; the read still counts (a model answered)
+        logger.info("invoice reader: refused reason=%s entity=%s", refusal, entity_id)
+        answer = {"suggestions": None, "reason": refusal}
+    elif answer["suggestions"]:
         # another currency: converted at Frankfurter's rate (owner, 2026-11-19) on the invoice's
         # day, else the day the bill is entered - after the read, outside the model's failover
         today = today_in(country_timezone(context["entity"]["country"]) or DEFAULT_ENTITY_TIMEZONE)
