@@ -34,6 +34,13 @@ from it, never from a role read out of the token (owner, 2026-11-12). `GET /api/
 companies the caller may enter (all of them for a super admin, own only otherwise), never an
 archived one (`archived_at` set; it replaced a dead `status != 'deleted'` filter, 2026-11-10).
 
+**Live on Xero, no code is added or deleted here (the user, 2026-11-23):** while the company is live
+(`books.live_on_xero`: `connected`, an organisation, `setup_mode` not `'minty'`), `POST /` and
+`DELETE /{id}` answer 409 "This company is connected to Xero, so accounts are added and changed in
+Xero. Make the change there, and Minty follows." and write nothing. `PUT /{id}` (the tick) is a
+setting, not the chart, and stays. No front end calls `POST` or `DELETE` today. Tests:
+`test_entity_bill_accounts_update.py`.
+
 `is_active` is the payment module's own tick (Payment Settings). `PUT /{id}` never touches
 Petty Cash's `account_info.status` (Petty Cash's tick state; its publish refuses a non-ACTIVE
 code), so the old "mirror into account_info" was removed on 2026-10-01 - it unticked codes in Petty

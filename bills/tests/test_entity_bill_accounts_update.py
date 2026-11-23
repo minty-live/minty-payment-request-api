@@ -285,3 +285,48 @@ def test_a_code_with_no_account_changes_no_module_row(api, entity, auth_headers)
     lone = _account(entity, "610")
     assert _put(api, auth_headers, lone, {"is_active": False}).status_code == 200
     assert not AccountModule.objects.filter(entity_id=entity.id).exists()
+
+
+ACCOUNTS_IN_XERO = (
+    "This company is connected to Xero, so accounts are added and changed in Xero. "
+    "Make the change there, and Minty follows."
+)
+
+
+@pytest.mark.django_db
+def test_live_on_xero_no_code_is_added_or_deleted_here_but_ticks_still_change(api, entity, auth_headers):
+    """The user's rule (2026-11-23): while live on Xero, accounts are added and changed in Xero only -
+    no bill code is added or deleted here. Ticking a code is a setting, not the chart: it stays."""
+    Entity.objects.filter(id=entity.id).update(status="connected", xero_org_id="org-1", setup_mode="xero")
+    _account(entity, "600")
+    code = _account(entity, "610")
+    added = api.post(
+        "/api/v1/entity-bill-accounts/",
+        data=json.dumps({"account_code": "900", "account_name": "By hand", "account_type": "EXPENSE"}),
+        content_type="application/json",
+        **auth_headers,
+    )
+    assert (added.status_code, added.json()) == (409, {"detail": ACCOUNTS_IN_XERO})
+    gone = api.delete(f"/api/v1/entity-bill-accounts/{code.id}", **auth_headers)
+    assert (gone.status_code, gone.json()) == (409, {"detail": ACCOUNTS_IN_XERO})
+    assert sorted(
+        EntityBillAccountXero.objects.filter(entity_id=entity.id, is_deleted=False).values_list(
+            "account_code", flat=True
+        )
+    ) == ["600", "610"]
+    assert _put(api, auth_headers, code, {"is_active": False}).status_code == 200
+
+
+@pytest.mark.django_db
+def test_mid_matching_or_in_minty_codes_are_still_added_and_deleted(api, entity, auth_headers):
+    """Xero off - disconnected, or the books still in Minty (mid-matching) - nothing changes."""
+    Entity.objects.filter(id=entity.id).update(status="connected", xero_org_id="org-1", setup_mode="minty")
+    _account(entity, "600")
+    added = api.post(
+        "/api/v1/entity-bill-accounts/",
+        data=json.dumps({"account_code": "900", "account_name": "By hand", "account_type": "EXPENSE"}),
+        content_type="application/json",
+        **auth_headers,
+    )
+    assert added.status_code == 201, added.content
+    assert api.delete(f"/api/v1/entity-bill-accounts/{added.json()['id']}", **auth_headers).status_code == 200

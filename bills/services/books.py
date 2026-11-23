@@ -35,6 +35,21 @@ def minty_on_its_own(entity_id) -> bool:
     return Entity.objects.filter(id=entity_id, setup_mode="minty").exists()
 
 
+#: The user's rule (2026-11-23): while live on Xero, the chart is Xero's to change.
+ACCOUNTS_IN_XERO = (
+    "This company is connected to Xero, so accounts are added and changed in Xero. "
+    "Make the change there, and Minty follows."
+)
+
+
+def live_on_xero(entity_id) -> bool:
+    """Connected to its organisation with the books in Xero: nothing in its chart or contacts is
+    added, changed or deleted in Minty (the user, 2026-11-23). Mid-matching (``setup_mode`` still
+    ``'minty'``), disconnected or never connected is not live."""
+    return (Entity.objects.filter(id=entity_id, status="connected").exclude(setup_mode="minty")
+            .exclude(xero_org_id__isnull=True).exclude(xero_org_id="").exists())
+
+
 def publish_refusal(entity_id, bill, token: Callable[[], str | None] | None = None) -> str | None:
     """Why this bill can't go to Xero, from who keeps the books - or None. A company still in Minty
     (no organisation, or one recorded but its accounts not matched yet) stays in Minty; once Xero is

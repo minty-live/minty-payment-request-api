@@ -36,6 +36,7 @@ from bills.schemas import (
     XeroContactLinkOut,
     XeroContactOut,
 )
+from bills.services.books import ACCOUNTS_IN_XERO, live_on_xero
 from core.exceptions import PermissionDeniedError
 from core.permissions import (
     check_edit_bill_settings,
@@ -217,6 +218,9 @@ def _mirror_module(account: EntityBillAccountXero) -> None:
 def create_entity_bill_account(request, payload: EntityBillAccountXeroCreateIn):
     check_not_system_superuser(request, "modify configuration")
     check_edit_bill_settings(request.entity_role)
+    if live_on_xero(request.entity_id):
+        # the user, 2026-11-23: live on Xero, accounts are added in Xero, and Minty follows
+        return 409, {"detail": ACCOUNTS_IN_XERO}
     data = payload.dict()
     # One code per Xero account per company (uq_ebax_entity_xero_account, 2026-11-03). A code
     # added by hand has no Xero id ("") and is not covered.
@@ -386,12 +390,15 @@ def update_entity_bill_account(
 
 @entity_bill_accounts_router.delete(
     "/{account_id}",
-    response={200: MessageOut, 404: ErrorOut},
+    response={200: MessageOut, 404: ErrorOut, 409: ErrorOut},
     summary="Delete an entity bill account",
 )
 def delete_entity_bill_account(request, account_id: str):
     check_not_system_superuser(request, "modify configuration")
     check_edit_bill_settings(request.entity_role)
+    if live_on_xero(request.entity_id):
+        # the user, 2026-11-23: live on Xero, accounts are changed in Xero, and Minty follows
+        return 409, {"detail": ACCOUNTS_IN_XERO}
     try:
         account = EntityBillAccountXero.objects.get(
             id=account_id,
