@@ -449,6 +449,33 @@ class TestTheEvidenceRule:
         assert AiRead.objects.get().status == "ok"  # answered, so it counts (a failed read never does)
 
 
+@pytest.mark.usefixtures("test_user_entity", "lists")
+class TestTheDocumentWarning:
+    """What the file may be instead of an invoice (the user, 2026-11-24): a warning beside the
+    suggestions, never a refusal."""
+
+    def test_a_bank_payment_confirmation_still_fills_and_carries_the_warning(self, api_client,
+                                                                             auth_headers, model):
+        model.answer = FakeResponse(_reply(document_type="bank_payment_confirmation"))
+        body = _extract(api_client, auth_headers).json()
+        assert body["document_warning"] == "bank_payment_confirmation"
+        assert body["reason"] is None and body["suggestions"]["amount"]["applied"] is True
+        assert "document_type" not in body["suggestions"]
+
+    @pytest.mark.parametrize("kind", ["invoice", "receipt", "", "a selfie"])
+    def test_an_invoice_a_receipt_or_an_unknown_type_warns_of_nothing(self, api_client, auth_headers,
+                                                                      model, kind):
+        model.answer = FakeResponse(_reply(document_type=kind))
+        assert _extract(api_client, auth_headers).json()["document_warning"] is None
+
+    def test_the_warning_travels_on_a_refused_read_too(self, api_client, auth_headers, model):
+        model.answer = FakeResponse(_reply(description="", document_type="unreadable"))
+        body = _extract(api_client, auth_headers).json()
+        assert (body["suggestions"], body["reason"], body["document_warning"]) == (
+            None, "no_description", "unreadable",
+        )
+
+
 def test_the_instruction_is_the_owners_simple_prompt_with_the_due_date_and_no_bill_number():
     instruction = ai_prompt.instruction("invoice")
     assert "- due_date: ISO 8601 date (YYYY-MM-DD)" in instruction
