@@ -59,15 +59,17 @@ v0.10; minty-petty-cash-api's `docs/features/expense-ai.md` has the text): seven
 `due_date` for an invoice ("if only terms such as Net 30 are printed, add them to the invoice
 date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
 `validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
-Since minty-shared-py v0.13 (the user, 2026-11-23) the account is always the closest one in the
-list, even when the model is unsure, never "".
+Since minty-shared-py v0.17 (the user's wording, 2026-11-24) the account is "" when nothing in
+the list matches (v0.13's "closest, never empty" is undone); the prompt is the receipt's, plus the
+due date.
 
 ## Evidence (owner's launch decisions, 2026-11-23)
 
 The basis is IRD's "A Guide to Keeping Business Records": a record of a payment shows what was paid
 for, and when the document doesn't list it, the description is the "additional notation"
 (minty-petty-cash-api's `docs/features/expense-ai.md` has the full note). minty-shared-py v0.15:
-- **`date`** (the invoice date) is a printed billing period's last day, otherwise the issue date;
+- **`date`** (the invoice date) is a printed billing period's last day, otherwise the payment date
+  (one line for receipts and invoices since v0.17, the user, 2026-11-24);
   the exchange rate is that same day's.
 - **`description`** is inferred from the supplier and context when no items are listed, with
   `account_id` chosen to match; an inferred one comes in the `low` band with `inferred: true`, so
