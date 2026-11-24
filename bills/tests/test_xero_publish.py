@@ -26,6 +26,11 @@ Audit trail
 Guard rails
   TC-PUB-040  Entity has no xero_org_id → BillValidationError before any HTTP call
   TC-PUB-041  access_token is empty → BillValidationError before any HTTP call
+
+Currency (2026-11-24)
+  The invoice names the company's currency; an organisation in another currency, or a company with
+  none, is refused before anything is sent; a failed Organisation read still publishes; Xero's
+  currency refusal says what to change
 """
 
 import datetime
@@ -33,10 +38,11 @@ from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 from minty_db.models import Entity, User, UserEntity
 
-from bills.models import Audit, Bill, BillLineItem, XeroBillSync, XeroBillSyncPayload
-from bills.services.xero_publish_service import publish_bill_to_xero
+from bills.models import Audit, Bill, BillLineItem, CurrencyInfo, XeroBillSync, XeroBillSyncPayload
+from bills.services.xero_publish_service import XERO_CURRENCY, publish_bill_to_xero
 from bills.tests.conftest import attach_invoice
 from core.exceptions import BillValidationError
 
@@ -1410,3 +1416,95 @@ class TestUploadBillAttachmentsToXero:
         mock_del.assert_called_once()
         deleted_file_id = mock_del.call_args[0][2]  # (access_token, xero_org_id, file_id)
         assert deleted_file_id == orphan_file_id
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# CURRENCY (2026-11-24)
+# ═══════════════════════════════════════════════════════════════════════════
+# A bill goes to Xero in the company's currency, and never into an organisation using another.
+# Before, the invoice carried no CurrencyCode and Xero booked its amount in the organisation's own
+# currency: HKD 500 could land as USD 500. The organisation's base currency (read with the lock dates)
+# must match or nothing is sent; Xero's own currency refusal says what to change. Xero can't change
+# its base currency, so every sentence points at Minty's.
+
+
+def _publish(bill, entity):
+    return publish_bill_to_xero(str(bill.id), entity.id, FAKE_USER_ID, FAKE_ACCESS_TOKEN)
+
+
+def _patched(put_answer):
+    return (patch(_PUT_PATH, **put_answer), patch(_UPLOAD_ATTACHMENTS_PATH), patch(_UPLOAD_BANKSLIPS_PATH))
+
+
+@pytest.mark.django_db
+def test_the_invoice_names_the_companys_currency(authorised_bill, xero_entity, xero_user_entity):
+    put, up, slips = _patched({"return_value": _xero_200()})
+    with put as mock_put, up, slips:
+        _publish(authorised_bill, xero_entity)
+    assert mock_put.call_args[1]["json"]["Invoices"][0]["CurrencyCode"] == "HKD"
+
+
+@pytest.mark.django_db
+def test_the_companys_currency_wins_over_the_bills_stored_code(authorised_bill, xero_entity, xero_user_entity,
+                                                                xero_organisation):
+    """The docs' rule: amounts are the company's currency, never the bill's stored code."""
+    sgd = CurrencyInfo.objects.create(currency_code="SGD", currency_name="Singapore Dollar", symbol="$",
+                                      decimal_places=2, is_active=True)
+    type(xero_entity).objects.filter(id=xero_entity.id).update(currency_id=sgd.id)
+    xero_organisation["BaseCurrency"] = "SGD"
+    put, up, slips = _patched({"return_value": _xero_200()})
+    with put as mock_put, up, slips:
+        _publish(authorised_bill, xero_entity)
+    assert mock_put.call_args[1]["json"]["Invoices"][0]["CurrencyCode"] == "SGD"
+
+
+@pytest.mark.django_db
+def test_an_organisation_in_another_currency_is_refused_before_anything_is_sent(
+        authorised_bill, xero_entity, xero_user_entity, xero_organisation):
+    xero_organisation["BaseCurrency"] = "USD"
+    put, up, slips = _patched({"return_value": _xero_200()})
+    with put as mock_put, up, slips, pytest.raises(BillValidationError) as refused:
+        _publish(authorised_bill, xero_entity)
+    assert str(refused.value) == ("Xero uses USD for Acme Ltd, but this company uses HKD in Minty, so nothing was "
+                                  "sent. Disconnect Xero in Settings, change the company's currency to USD, then "
+                                  "connect again.")
+    mock_put.assert_not_called()
+    authorised_bill.refresh_from_db()
+    assert authorised_bill.published != Bill.PublishStatus.PUBLISHED
+
+
+@pytest.mark.parametrize("failure", [requests.ConnectionError("down"), 500, "no currency"])
+@pytest.mark.django_db
+def test_an_organisation_xero_cant_tell_the_currency_of_still_publishes(
+        authorised_bill, xero_entity, xero_user_entity, xero_organisation, failure):
+    """A failed read only logs: the invoice names the currency, so Xero refuses one it doesn't use."""
+    if failure == "no currency":
+        xero_organisation["BaseCurrency"] = None
+    else:
+        xero_organisation["fail"] = failure
+    put, up, slips = _patched({"return_value": _xero_200()})
+    with put as mock_put, up, slips:
+        _publish(authorised_bill, xero_entity)
+    assert mock_put.call_count == 1
+
+
+@pytest.mark.django_db
+def test_a_company_with_no_currency_is_refused_before_anything_is_sent(authorised_bill, xero_entity,
+                                                                        xero_user_entity):
+    type(xero_entity).objects.filter(id=xero_entity.id).update(currency_id=None)
+    put, up, slips = _patched({"return_value": _xero_200()})
+    with put as mock_put, up, slips, pytest.raises(BillValidationError) as refused:
+        _publish(authorised_bill, xero_entity)
+    assert "no currency" in str(refused.value)
+    mock_put.assert_not_called()
+
+
+@pytest.mark.django_db
+def test_xero_refusing_the_currency_says_what_to_change(authorised_bill, xero_entity, xero_user_entity):
+    refusal = MagicMock(status_code=400, headers={}, text="refused")
+    refusal.json.return_value = {"Elements": [{"ValidationErrors": [
+        {"Message": "Organisation is not subscribed to currency HKD"}]}]}
+    put, up, slips = _patched({"return_value": refusal})
+    with put, up, slips, pytest.raises(BillValidationError) as refused:
+        _publish(authorised_bill, xero_entity)
+    assert str(refused.value) == XERO_CURRENCY

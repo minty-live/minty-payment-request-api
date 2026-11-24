@@ -33,6 +33,34 @@ def _block_real_token_service_calls(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def xero_organisation(monkeypatch):
+    """Xero's ``GET /Organisation`` for the publish (its lock dates and base currency, 2026-11-24),
+    answered here so no test reaches Xero: ``{"BaseCurrency": "HKD"}`` by default - set a key to
+    change the answer, ``fail`` to an exception or a status code to make it fail. Any other GET goes
+    to whatever ``requests.get`` is (a test's own patch inside the test still wins)."""
+    from unittest.mock import MagicMock
+
+    state = {"Name": "Acme Ltd", "BaseCurrency": "HKD", "fail": None}
+    real_get = requests.get
+
+    def answer(url, *args, **kwargs):
+        if not str(url).endswith("/Organisation"):
+            return real_get(url, *args, **kwargs)
+        if isinstance(state["fail"], Exception):
+            raise state["fail"]
+        resp = MagicMock()
+        resp.status_code = state["fail"] or 200
+        org = {k: v for k, v in state.items() if k != "fail" and v is not None}
+        org["OrganisationID"] = (kwargs.get("headers") or {}).get("Xero-Tenant-Id")
+        resp.json.return_value = {"Organisations": [org]}
+        resp.text = "{}"
+        return resp
+
+    monkeypatch.setattr("bills.services.xero_publish_service.requests.get", answer)
+    return state
+
+
+@pytest.fixture(autouse=True)
 def _registry_rows(request):
     """The country / currency rows the entity fixtures point at.
 

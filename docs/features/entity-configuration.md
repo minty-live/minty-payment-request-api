@@ -107,6 +107,10 @@ A payment is in its bill's currency (the entity's when the bill has none; neithe
 set on create and never changed by an update; the client's `currency_code` is ignored here
 too.
 
+The publish sends the entity's currency as the invoice's `CurrencyCode` and refuses an
+organisation whose base currency differs, before anything is sent (2026-11-24;
+[xero-publish.md](xero-publish.md) step 4).
+
 ## Keeping the caches fresh
 
 `xero_sync.py` asks accounts-api's one Xero sync (`POST /api/internal/xero/sync`, a 60-second

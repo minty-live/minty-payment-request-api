@@ -34,9 +34,22 @@ from bills.services.attachment_service import _get_s3_client
 from bills.services.audit_service import log_audit
 from bills.services.contact_service import xero_org_scope
 from bills.services.xero_token_service import resolve_xero_access_token_for_entity
+from core.entity_currency import require_entity_currency_code
 from core.exceptions import BillValidationError
 
 logger = logging.getLogger("minty-api")
+
+#: The organisation's base currency isn't the company's (2026-11-24): nothing is sent. Xero can't
+#: change its base currency, so the sentence points at Minty's.
+CURRENCY_MISMATCH = (
+    "Xero uses {xero} for {org}, but this company uses {minty} in Minty, so nothing was sent. "
+    "Disconnect Xero in Settings, change the company's currency to {xero}, then connect again."
+)
+#: Xero refusing the invoice over its currency (an organisation not using the company's).
+XERO_CURRENCY = (
+    "Xero doesn't use this company's currency. Disconnect Xero in Settings, change the company's "
+    "currency to your Xero organisation's, then connect again."
+)
 
 XERO_API_BASE = "https://api.xero.com/api.xro/2.0"
 XERO_FILES_API_BASE = "https://api.xero.com/files.xro/1.0"
@@ -121,6 +134,11 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
     # it - the files upload after the bill exists - so this is where the rule holds.
     if not any(not ba.attachment.is_deleted for ba in bill.bill_attachments.all()):
         raise BillValidationError("Add the invoice attachment to publish this payment request.")
+    # The invoice names the company's currency (2026-11-24): never a bill without one, and never
+    # into an organisation using another - checked before anything is sent.
+    currency = require_entity_currency_code(entity_id)
+    organisation = _read_organisation(access_token, xero_org_id)
+    _refuse_another_currency(organisation, currency, entity_id, xero_org_id)
 
     # Was this bill previously published, and was that to THIS Xero org?
     #
@@ -172,7 +190,7 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
                 "Please re-select the contact from the dropdown and save before publishing."
             )
 
-    lock_dates = fetch_lock_dates(access_token, xero_org_id)
+    lock_dates = _lock_dates_of(organisation)
 
     if prior_sync and prior_sync.response_invoice_id:
         # Republish — update the existing Xero invoice via POST /Invoices/{InvoiceID}
@@ -223,7 +241,7 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
             bill, Audit.Action.PUBLISHED_TO_XERO, user_id,
             f"Publish failed: {sync.error_message[:200]}",
         )
-        raise BillValidationError(f"Xero rejected the invoice: {sync.error_message}")
+        raise BillValidationError(_rejected("Xero rejected the invoice", sync.error_message))
 
     logger.info("publish_bill_to_xero: completed bill=%s sync=%s", bill_id, sync.id)
     return {"bill": bill, "sync_id": str(sync.id)}
@@ -288,7 +306,7 @@ def _update_bill_to_xero(
                 void_response.json() if void_response.text else {},
                 void_response.text,
             )
-            raise BillValidationError(f"Xero rejected the VOID request: {error_msg}")
+            raise BillValidationError(_rejected("Xero rejected the VOID request", error_msg))
 
         logger.info(
             "_update_bill_to_xero: voided invoice=%s status=%s",
@@ -332,7 +350,7 @@ def _update_bill_to_xero(
                 bill, Audit.Action.PUBLISHED_TO_XERO, user_id,
                 f"Recreate as DRAFT failed: {sync.error_message[:200]}",
             )
-            raise BillValidationError(f"Xero rejected the new DRAFT invoice: {sync.error_message}")
+            raise BillValidationError(_rejected("Xero rejected the new DRAFT invoice", sync.error_message))
 
         logger.info("_update_bill_to_xero: completed (void+recreate) bill=%s sync=%s", bill.id, sync.id)
         return {"bill": bill, "sync_id": str(sync.id)}
@@ -374,7 +392,7 @@ def _update_bill_to_xero(
             bill, Audit.Action.PUBLISHED_TO_XERO, user_id,
             f"Update failed: {sync.error_message[:200]}",
         )
-        raise BillValidationError(f"Xero rejected the update: {sync.error_message}")
+        raise BillValidationError(_rejected("Xero rejected the update", sync.error_message))
 
     logger.info("_update_bill_to_xero: completed bill=%s sync=%s", bill.id, sync.id)
     return {"bill": bill, "sync_id": str(sync.id)}
@@ -426,6 +444,42 @@ def _parse_xero_ms_date(raw):
     return datetime.fromtimestamp(ms / 1000, tz=UTC).astimezone(_HK_TZ).date()
 
 
+def _rejected(prefix: str, error: str) -> str:
+    """The sentence for a Xero refusal: its own words after ``prefix``, except a refusal over the
+    currency (2026-11-24), which says what to change."""
+    if "currency" in (error or "").lower():
+        return XERO_CURRENCY
+    return f"{prefix}: {error}"
+
+
+def _refuse_another_currency(organisation: dict | None, currency: str, entity_id, xero_org_id) -> None:
+    """Refuse (``BillValidationError``) when the organisation's base currency isn't the company's.
+    An organisation Xero couldn't tell the currency of only logs: the invoice names the company's
+    currency, so Xero itself refuses one its organisation doesn't use."""
+    xero = (organisation or {}).get("BaseCurrency")
+    if not isinstance(xero, str) or not xero.strip():
+        logger.warning("publish: no base currency read for org=%s entity=%s; the invoice's own currency guards it",
+                       xero_org_id, entity_id)
+        return
+    xero = xero.strip().upper()
+    if xero == currency.upper():
+        return
+    logger.warning("publish: entity=%s uses %s but org=%s uses %s; refused", entity_id, currency, xero_org_id, xero)
+    name = organisation.get("Name")
+    raise BillValidationError(CURRENCY_MISMATCH.format(
+        xero=xero, minty=currency, org=name if isinstance(name, str) and name else "your Xero organisation"))
+
+
+def _lock_dates_of(organisation: dict | None) -> tuple:
+    """``(period_lock_date, end_of_year_lock_date)`` of an organisation read by ``_read_organisation``."""
+    if not organisation:
+        return None, None
+    return (
+        _parse_xero_ms_date(organisation.get("PeriodLockDate")),
+        _parse_xero_ms_date(organisation.get("EndOfYearLockDate")),
+    )
+
+
 def fetch_lock_dates(access_token: str, xero_org_id: str) -> tuple:
     """``(period_lock_date, end_of_year_lock_date)`` from Xero's Organisation, each a
     ``date`` or None.
@@ -435,6 +489,12 @@ def fetch_lock_dates(access_token: str, xero_org_id: str) -> tuple:
     failed lookup is logged and answers ``(None, None)``, which publishes AUTHORISED -
     exactly what an empty cache used to do.
     """
+    return _lock_dates_of(_read_organisation(access_token, xero_org_id))
+
+
+def _read_organisation(access_token: str, xero_org_id: str) -> dict | None:
+    """Xero's ``Organisation`` for the publish - its lock dates and base currency - or None when
+    Xero can't be asked (logged)."""
     try:
         resp = requests.get(
             f"{XERO_API_BASE}/Organisation",
@@ -447,25 +507,22 @@ def fetch_lock_dates(access_token: str, xero_org_id: str) -> tuple:
         )
         if resp.status_code != 200:
             logger.error(
-                "lock dates: Xero Organisation returned %s org=%s body=%s",
+                "organisation: Xero Organisation returned %s org=%s body=%s",
                 resp.status_code, xero_org_id, (resp.text or "")[:300],
             )
-            return None, None
+            return None
         orgs = (resp.json() or {}).get("Organisations", [])
         org = next(
-            (o for o in orgs if o.get("OrganisationID") == str(xero_org_id)),
+            (o for o in orgs if isinstance(o, dict) and o.get("OrganisationID") == str(xero_org_id)),
             orgs[0] if orgs else None,
         )
-        if not org:
-            logger.error("lock dates: no organisation in Xero response org=%s", xero_org_id)
-            return None, None
-        return (
-            _parse_xero_ms_date(org.get("PeriodLockDate")),
-            _parse_xero_ms_date(org.get("EndOfYearLockDate")),
-        )
-    except Exception as exc:  # noqa: BLE001 - a lock-date hiccup must not block a publish
-        logger.error("lock dates: lookup failed org=%s %s: %s", xero_org_id, type(exc).__name__, exc)
-        return None, None
+        if not isinstance(org, dict):
+            logger.error("organisation: no organisation in Xero response org=%s", xero_org_id)
+            return None
+        return org
+    except Exception as exc:  # noqa: BLE001 - a hiccup must not block a publish (the invoice names its currency)
+        logger.error("organisation: lookup failed org=%s %s: %s", xero_org_id, type(exc).__name__, exc)
+        return None
 
 
 def _build_xero_invoice_payload(bill: Bill, entity: Entity, lock_dates=(None, None)) -> dict:
@@ -520,6 +577,9 @@ def _build_xero_invoice_payload(bill: Bill, entity: Entity, lock_dates=(None, No
         "Reference": bill.description or "",
         "InvoiceNumber": bill.reference or "",
         "Status": xero_status,
+        # The company's currency, never the bill's stored code (entity-configuration.md); without
+        # one Xero booked the amount in the organisation's own currency (2026-11-24).
+        "CurrencyCode": require_entity_currency_code(str(entity.id)),
     }
 
     return {"Invoices": [invoice]}

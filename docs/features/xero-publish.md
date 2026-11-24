@@ -24,16 +24,30 @@ token side in [authentication.md](authentication.md).
    contact with the same name (case, spaces and punctuation ignored); a Minty-only supplier is found in
    Xero by name or made there as a supplier first (`xero_contact_for`, owner's decisions doc C1,
    2026-11-19).
-4. **Lock dates** — `fetch_lock_dates` reads the organisation's period and end-of-year
-   locks; a bill dated on or before either is sent as `DRAFT` (Xero refuses to AUTHORISE
-   into a locked period), otherwise `AUTHORISED`.
+4. **Currency and lock dates** — before anything is sent (2026-11-24), the company must have a
+   currency (`require_entity_currency_code`, else 422 "Your company has no currency set…") and
+   one `GET /Organisation` (`_read_organisation`) is read for both:
+   - its `BaseCurrency` must be the company's, else 422 "Xero uses USD for Acme Ltd, but this
+     company uses HKD in Minty, so nothing was sent. Disconnect Xero in Settings, change the
+     company's currency to USD, then connect again." (`CURRENCY_MISMATCH`; Xero can't change its
+     base currency, so the sentence points at Minty's). Xero not answering, or no base currency
+     in its answer, only logs - the invoice names its currency, so Xero itself refuses one its
+     organisation doesn't use;
+   - its period and end-of-year locks (`_lock_dates_of`; `fetch_lock_dates` reads them alone): a
+     bill dated on or before either is sent as `DRAFT` (Xero refuses to AUTHORISE into a locked
+     period), otherwise `AUTHORISED`.
 5. **First publish** — `PUT /Invoices` with the payload from `_build_xero_invoice_payload`
-   (contact, dates, reference, the line with its account code, currency), each sync row
+   (contact, dates, reference, the line with its account code, and `CurrencyCode` - the
+   company's, never the bill's stored code; until 2026-11-24 no currency was sent and Xero booked
+   the amount in the organisation's own currency), each sync row
    carrying a fresh idempotency key; **republish** — `POST /Invoices/{InvoiceID}` to update
    in place, except when an AUTHORISED invoice must become DRAFT (the date moved into a
    locked period): then the old one is voided and a new one created. The request, headers
    (the `Authorization` stripped), response and response lines are stored on the sync row;
-   `http_status_code`, `sync_status` (`success` / `failed`), `error_message`.
+   `http_status_code`, `sync_status` (`success` / `failed`), `error_message`. A refusal is
+   422 "Xero rejected the invoice: <Xero's words>", except one naming the currency
+   (`XERO_CURRENCY`: "Xero doesn't use this company's currency. Disconnect Xero in Settings,
+   change the company's currency to your Xero organisation's, then connect again.").
 6. **Attachments** — every bill attachment goes to the invoice through the **Files API**
    as a full replace (the previous FileIds are deleted first, then re-uploaded and
    associated); a payment's bank slips the same way ([payments.md](payments.md)).

@@ -66,6 +66,14 @@ logger.warning("Xero API call failed: %s", exc)
 raise BillValidationError("I couldn't reach Xero just now. Mind trying again?")
 ```
 
+**Xero's currency refusals** (2026-11-24, `bills/services/xero_publish_service.py`) state the
+rule and what to change rather than apologise: Xero can't change an organisation's base
+currency, so both point at the company's currency in Minty - `CURRENCY_MISMATCH` ("Xero uses
+USD for Acme Ltd, but this company uses HKD in Minty, so nothing was sent. Disconnect Xero in
+Settings, change the company's currency to USD, then connect again.") before anything is sent,
+and `XERO_CURRENCY` for a refusal Xero itself gives (`_rejected`; every other refusal keeps
+"Xero rejected the invoice: <Xero's words>").
+
 Some tests assert on this copy (`test_xero_publish.py`,
 `test_entity_bill_contacts_create.py`). That is deliberate -- it stops a message
 regressing silently. Update the assertion along with the copy.
