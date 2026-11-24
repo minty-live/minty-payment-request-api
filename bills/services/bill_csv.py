@@ -25,6 +25,7 @@ from django.db.models.functions import Coalesce
 from django.utils import timezone
 
 from bills.models import Bill, BillLine, CurrencyInfo, Payment
+from bills.services import chart_view
 from core.exceptions import BillValidationError
 
 COLUMNS = (
@@ -110,10 +111,11 @@ def _iso(value) -> str:
     return value.isoformat()
 
 
-def _accounts(bill: Bill) -> str:
+def _accounts(bill: Bill, views: dict) -> str:
+    """Each line's account code as the chart has it now (the user's rule, 2026-11-24)."""
     codes: list[str] = []
     for line in bill.line_items.all():
-        code = (line.account_code or "").strip()
+        code, _ = chart_view.line_account(line, views)
         if code and code not in codes:
             codes.append(code)
     return "; ".join(codes) if codes else (bill.xero_account_code or "").strip()
@@ -131,11 +133,15 @@ def to_csv(bills) -> bytes:
     buffer = io.StringIO()
     writer = csv.writer(buffer, lineterminator="\n")
     writer.writerow(COLUMNS)
+    bills = list(bills)
+    views = chart_view.accounts(line.account_id for bill in bills for line in bill.line_items.all())
+    names = chart_view.contacts(bill.contact_id for bill in bills)
     for bill in bills:
         writer.writerow([
-            bill.reference or "", bill.contact_name or "", _iso(bill.invoice_date), _iso(bill.due_date),
+            bill.reference or "", chart_view.bill_contact(bill, names), _iso(bill.invoice_date),
+            _iso(bill.due_date),
             _iso(bill.created_at), STATUS_LABELS.get(str(bill.status), str(bill.status or "").title()),
-            bill.description or "", _accounts(bill), _money(bill.amount), _money(_unpaid(bill)),
+            bill.description or "", _accounts(bill, views), _money(bill.amount), _money(_unpaid(bill)),
             _iso(bill.paid_at), bill.currency_text,
         ])
     return buffer.getvalue().encode("utf-8")

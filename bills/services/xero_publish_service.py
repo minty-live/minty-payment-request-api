@@ -30,6 +30,7 @@ from bills.models import (
     XeroBillSyncLine,
     XeroBillSyncPayload,
 )
+from bills.services import chart_view
 from bills.services.attachment_service import _get_s3_client
 from bills.services.audit_service import log_audit
 from bills.services.contact_service import xero_org_scope
@@ -123,6 +124,8 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
 
     logger.info("publish_bill_to_xero: starting bill=%s entity=%s", bill_id, entity_id)
 
+    # What is sent is the chart's now (the user's rule, 2026-11-24): the text copies follow the ids.
+    chart_view.refresh_bill_text(_load_bill(bill_id, entity_id).id)
     bill = _load_bill(bill_id, entity_id)
     entity = _load_entity(entity_id)
     xero_org_id = entity.xero_org_id
@@ -403,8 +406,9 @@ def _update_bill_to_xero(
 
 def _snapshot(bill: Bill) -> None:
     """What this publish sent, frozen (Xero optional, 2026-11-10): each line's account code and
-    name, and the supplier's name. A published bill shows these; no sync or code change rewrites
-    them, only the next successful publish."""
+    name, and the supplier's name - the record of what went to Xero, never shown (screens read the
+    chart now, ``chart_view``; the user's rule, 2026-11-24). No sync or code change rewrites them,
+    only the next successful publish."""
     Bill.objects.filter(id=bill.id).update(published_contact_name=bill.contact_name or None)
     for line in bill.line_items.all():
         BillLine.objects.filter(id=line.id).update(

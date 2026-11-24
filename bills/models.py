@@ -211,12 +211,22 @@ class BillLine(models.Model):
         update_fields = kwargs.get("update_fields")
         if update_fields is None or "account_code" in update_fields:
             self.account_id = self._account_for_code()
+            if self.account_id:
+                # the text follows the chart (the user's rule, 2026-11-24): the account's name now
+                from bills.services.chart_view import accounts
+
+                view = accounts([self.account_id]).get(self.account_id)
+                if view is not None and view.name:
+                    self.account_name = view.name[:150]
             if update_fields is not None:
-                kwargs["update_fields"] = [*update_fields, "account_id"]
+                kwargs["update_fields"] = [*update_fields, "account_id", "account_name"]
         super().save(*args, **kwargs)
 
     def _account_for_code(self):
-        """The company's active account with this line's code: Xero's code, or one made in Minty."""
+        """The company's active account with this line's code: Xero's code, or one made in Minty.
+
+        No active one: an account with that code merged away stands for the account it was merged
+        into, so a bill edited with its old code keeps its account."""
         code = (self.account_code or "").strip()
         if not code or not self.bill_id:
             return None
@@ -226,8 +236,18 @@ class BillLine(models.Model):
         if entity_id is None:
             return None
         active = AccountInfo.objects.filter(entity_id=entity_id, status="ACTIVE", record_status="active")
-        return (active.filter(xero_code=code).values_list("id", flat=True).first()
-                or active.filter(code=code).values_list("id", flat=True).first())
+        found = (active.filter(xero_code=code).values_list("id", flat=True).first()
+                 or active.filter(code=code).values_list("id", flat=True).first())
+        if found:
+            return found
+        merged = AccountInfo.objects.filter(entity_id=entity_id, merged_into__isnull=False)
+        gone = (merged.filter(xero_code=code).values_list("id", flat=True).first()
+                or merged.filter(code=code).values_list("id", flat=True).first())
+        if gone is None:
+            return None
+        from bills.services.chart_view import kept_account_id
+
+        return kept_account_id(gone)
 
     class Meta:
         managed = False

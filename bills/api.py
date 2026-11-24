@@ -4,8 +4,9 @@ from botocore.exceptions import ClientError
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db.models import Case, IntegerField, OuterRef, Q, Subquery, Value, When
+from django.db.models.functions import Coalesce
 from django.http import Http404, HttpResponse, StreamingHttpResponse
-from minty_db.models import Entity
+from minty_db.models import Entity, XeroContactSync
 from ninja import File, Query, Router
 from ninja.files import UploadedFile
 
@@ -26,7 +27,7 @@ from bills.schemas import (
     ReturnBillIn,
     SuggestedReferenceOut,
 )
-from bills.services import bill_csv, invoice_reader
+from bills.services import bill_csv, chart_view, invoice_reader
 from bills.services.attachment_service import (
     _get_s3_client,
     delete_attachment,
@@ -81,6 +82,10 @@ def _bill_to_out(bill: Bill) -> dict:
         for ba in bill.bill_attachments.select_related("attachment").all()
     ]
 
+    # Accounts and the supplier as the chart shows them now (the user's rule, 2026-11-24).
+    lines = list(bill.line_items.all())
+    views = chart_view.accounts(li.account_id for li in lines)
+    names = chart_view.contacts([bill.contact_id])
     line_items = [
         {
             "id": str(li.id),
@@ -88,21 +93,22 @@ def _bill_to_out(bill: Bill) -> dict:
             "quantity": li.quantity,
             "unit_amount": li.unit_amount,
             "line_amount": li.line_amount,
-            "account_code": li.account_code,
-            "account_name": li.account_name,
+            "account_id": str(views[li.account_id].id) if li.account_id in views else None,
+            "account_code": chart_view.line_account(li, views)[0],
+            "account_name": chart_view.line_account(li, views)[1],
             "tax_type": li.tax_type,
             "sort_order": li.sort_order,
             "note": li.note,
             "created_at": li.created_at,
             "updated_at": li.updated_at,
         }
-        for li in bill.line_items.all()
+        for li in lines
     ]
 
     return {
         "id": str(bill.id),
         "entity_id": str(bill.entity_id),
-        "contact": bill.contact,
+        "contact": chart_view.bill_contact(bill, names),
         "xero_contact_id": bill.xero_contact_id,
         "status": bill.status,
         "amount": bill.amount,
@@ -112,7 +118,7 @@ def _bill_to_out(bill: Bill) -> dict:
         "invoice_date": bill.invoice_date,
         "reference": bill.reference,
         "currency_code": bill.currency_code,
-        "xero_account_code": bill.xero_account_code,
+        "xero_account_code": chart_view.bill_account_code(bill, lines, views),
         "published": bill.published,
         "uploaded_by": bill.uploaded_by,  # str via the property
         "created_at": bill.created_at,
@@ -250,17 +256,22 @@ def list_bills(request, filters: Query[BillFilterQuery]):
         .order_by("-created_at")
         .values("payment_date")[:1]
     )
+    # The supplier's name now (the user's rule, 2026-11-24): searched, filtered and sorted as shown.
+    supplier = Coalesce(
+        Subquery(XeroContactSync.objects.filter(id=OuterRef("contact_id")).values("name")[:1]),
+        "contact_name",
+    )
     qs = Bill.objects.filter(entity_id=request.entity_id).annotate(
-        paid_at=completed_payment_date
+        paid_at=completed_payment_date, supplier_name=supplier,
     )
 
     if filters.status:
         qs = qs.filter(status=filters.status)
     if filters.contact:
-        qs = qs.filter(contact_name__icontains=filters.contact)
+        qs = qs.filter(supplier_name__icontains=filters.contact)
     if filters.search and filters.search.strip():
         q = filters.search.strip()
-        qs = qs.filter(Q(contact_name__icontains=q) | Q(description__icontains=q))
+        qs = qs.filter(Q(supplier_name__icontains=q) | Q(description__icontains=q))
     if filters.amount_min is not None:
         qs = qs.filter(amount__gte=filters.amount_min)
     if filters.amount_max is not None:
@@ -289,18 +300,20 @@ def list_bills(request, filters: Query[BillFilterQuery]):
         "-status",
     }
     sort = filters.sort_by if filters.sort_by in allowed_sorts else "-created_at"
-    qs = qs.order_by(sort.replace("contact", "contact_name"))  # the column's name since C8
+    qs = qs.order_by(sort.replace("contact", "supplier_name"))
 
     page_size = min(max(1, filters.page_size), 100)
     page = max(1, filters.page)
     offset = (page - 1) * page_size
 
-    bills = list(qs[offset : offset + page_size])
+    bills = list(qs[offset : offset + page_size].prefetch_related("line_items"))
+    views = chart_view.accounts(li.account_id for b in bills for li in b.line_items.all())
+    names = chart_view.contacts(b.contact_id for b in bills)
     return [
         {
             "id": str(b.id),
             "entity_id": str(b.entity_id),
-            "contact": b.contact,
+            "contact": chart_view.bill_contact(b, names),
             "status": b.status,
             "amount": b.amount,
             "amount_due": get_amount_due(b),
@@ -309,7 +322,7 @@ def list_bills(request, filters: Query[BillFilterQuery]):
             "invoice_date": b.invoice_date,
             "reference": b.reference,
             "currency_code": b.currency_code,
-            "xero_account_code": b.xero_account_code,
+            "xero_account_code": chart_view.bill_account_code(b, list(b.line_items.all()), views),
             "published": b.published,
             "created_at": b.created_at,
             "uploaded_by": b.uploaded_by,

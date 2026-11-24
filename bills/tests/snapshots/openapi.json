@@ -1946,6 +1946,17 @@
             "title": "Account Code",
             "type": "string"
           },
+          "account_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Account Id"
+          },
           "account_name": {
             "title": "Account Name",
             "type": "string"

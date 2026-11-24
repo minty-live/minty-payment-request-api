@@ -6,13 +6,26 @@ Since 2026-11-10 (minty-db v0.5's EXPAND; the design is Minty's
 **Bill lines name their account by id.** `bill_line.account_id` is kept in step by
 `BillLine.save()`: the company's active account (`status = 'ACTIVE'`, `record_status = 'active'`) whose
 Xero code - or, for an account the company made in Minty, its own code - is the line's
-`account_code`. No such account, or no code, leaves it empty. The code text stays until CONTRACT,
-when lines move to the id alone.
+`account_code`. No such account, or no code, leaves it empty - unless that code belongs to an account
+merged away, which stands for its kept account (so a bill edited with its old code keeps its account).
+The save also writes the account's name now into `account_name`.
+
+**Every bill shows the chart as it is now** (the user's rule, 2026-11-24; `services/chart_view.py`).
+The detail, the list (its supplier search, filter and sort included), the CSV and the duplicate
+warning read each line's code and name from `bill_line.account_id`, the header code from the first
+line's account, and the supplier's name from `bill.contact_id` - a merged account or contact shows
+the one kept, published bills included. `LineItemOut` carries `account_id`. Only a line with no
+account (a code no account of the company has) shows its stored text. The text copies are kept in
+step anyway: accounts-api rewrites them at matching's Finish, a merge and a Xero rename
+(`xero/services/bill_text.py`), and a publish first rewrites the bill's from its ids
+(`chart_view.refresh_bill_text`), so what goes to Xero is the chart's now. Nothing is re-sent by a
+relabel. Old lines got their ids from minty-db's `patches/2026-11-24_bill_line_account_ids.sql`.
+Tests: `bills/tests/test_chart_view.py`.
 
 **The publish writes what it sent** (`xero_publish_service._snapshot`, after every successful create
 or update): each line's `published_account_code` / `published_account_name` and the bill's
-`published_contact_name`. A published bill shows those; no sync or later code change rewrites
-them - only the next successful publish.
+`published_contact_name` - the record of what went to Xero, never shown. No sync or later code
+change rewrites them - only the next successful publish.
 
 **A company keeping its books in Minty** (`setup_mode = 'minty'`, no Xero organisation;
 `services/books.minty_on_its_own`):

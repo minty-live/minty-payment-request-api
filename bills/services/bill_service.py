@@ -8,6 +8,7 @@ from minty_shared import ai, fx
 from minty_shared.time import DEFAULT_ENTITY_TIMEZONE, country_timezone, today_in
 
 from bills.models import Audit, Bill, BillLineItem
+from bills.services import chart_view
 from bills.services.audit_service import log_audit
 from bills.services.bill_reference_generator import generate_unique_bill_reference
 from bills.services.payment_service import sync_bill_status_from_payments
@@ -339,8 +340,10 @@ def ask_about_duplicates(entity_id, data, bill: Bill | None = None) -> None:
                                amount=amount).exclude(status=Bill.Status.VOIDED)
     if bill is not None:
         rows = rows.exclude(id=bill.id)
-    found = [{"id": str(b.id), "reference": b.reference or "", "contact": b.contact or "", "amount": b.amount,
-              "invoice_date": b.invoice_date} for b in rows.order_by("created_at")[:5]]
+    rows = list(rows.order_by("created_at")[:5])
+    names = chart_view.contacts(b.contact_id for b in rows)  # the supplier's name now
+    found = [{"id": str(b.id), "reference": b.reference or "", "contact": chart_view.bill_contact(b, names),
+              "amount": b.amount, "invoice_date": b.invoice_date} for b in rows]
     if found:
         raise DuplicateBill(found)
 

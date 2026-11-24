@@ -92,6 +92,8 @@ class LineItemOut(Schema):
     quantity: Decimal
     unit_amount: Decimal
     line_amount: Decimal
+    #: The line's account in the chart now (a merged one's kept account); None for a line with none.
+    account_id: IdStr | None = None
     account_code: str
     account_name: str
     tax_type: str
