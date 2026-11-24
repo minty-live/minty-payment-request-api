@@ -259,7 +259,8 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
         result = ai.read(document, document_mime, config=config, instruction=instruction,
                          prefix_text=prefix, closing_text=ai_prompt.CLOSING, reply_model=Reading,
                          validate=lambda parsed: validate(parsed, context, aliases),
-                         models=policy.models)
+                         models=policy.models,
+                         labels=ai.request_labels(entity_id, ai.FEATURE_PAYMENT_REQUEST))
     finally:
         # Even if something here raised, the reserved read is closed (failed, so never counted).
         ai_allowance.finish(read_id, result)

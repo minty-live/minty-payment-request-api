@@ -197,6 +197,13 @@ def draft_bill_with_attachment(db, draft_bill):
     return draft_bill
 
 
+#: ai_policy.model_prices (the user, 2026-11-24): USD per 1M tokens, every model the tests name.
+MODEL_PRICES = {
+    "gemini-3.8-flash": {"input": 0.75, "output": 3.75, "cached_input": 0.075},
+    "gemini-3.5-flash-lite": {"input": 0.30, "output": 2.50, "cached_input": 0.03},
+}
+
+
 @pytest.fixture
 def ai_policy(db):
     """minty-db's one ``ai_policy`` row (seed_catalogue.sql writes it in a real database): one
@@ -207,4 +214,5 @@ def ai_policy(db):
     from minty_db.models import AiPolicy
 
     return AiPolicy.objects.create(id=1, primary_model="gemini-3.8-flash", backup_model=None,
-                                   default_grant={"tokens": 1000000}, limit_rules=[], invoice_reader_on=True)
+                                   default_grant={"tokens": 1000000}, limit_rules=[], invoice_reader_on=True,
+                                   model_prices=MODEL_PRICES)

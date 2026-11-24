@@ -18,6 +18,7 @@ from minty_shared.django import ai_allowance
 
 from bills.models import EntityBillAccountXero
 from bills.services import invoice_reader
+from bills.tests.conftest import MODEL_PRICES
 
 pytestmark = pytest.mark.django_db
 
@@ -149,6 +150,16 @@ def test_an_invoice_is_read_against_the_company_s_bill_lists(api_client, auth_he
     [request] = model.requests
     assert _parts(request)[1].inline_data.mime_type == "application/pdf"
     assert request["config"].system_instruction == ai_prompt.instruction("invoice")
+
+
+def test_the_read_is_labelled_for_cloud_billing(api_client, auth_headers, test_user_entity, test_entity,
+                                                lists, model, monkeypatch):
+    """Google's cost per company: env, feature, entity - nothing per invoice or person (2026-11-24)."""
+    monkeypatch.delenv("APP_ENV", raising=False)
+    assert _extract(api_client, auth_headers).status_code == 200
+    [request] = model.requests
+    assert request["config"].labels == {"env": "production", "feature": "payment_request",
+                                        "entity_id": str(test_entity.id).lower()}
 
 
 def test_the_prefix_carries_only_what_the_bill_form_offers(api_client, auth_headers, test_user_entity,
@@ -288,7 +299,7 @@ def test_the_form_learns_whether_the_reader_is_on(api_client, auth_headers, test
     if switch is None:
         AiPolicy.objects.filter(id=1).delete()
         AiPolicy.objects.create(id=1, primary_model="gemini-3.8-flash", default_grant={"tokens": 1000000},
-                                limit_rules=[], receipt_reader_on=True)
+                                limit_rules=[], receipt_reader_on=True, model_prices=MODEL_PRICES)
     else:
         _policy(invoice_reader_on=switch)
 
