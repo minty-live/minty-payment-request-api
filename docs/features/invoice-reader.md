@@ -49,7 +49,8 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
   value read off an invoice; `model=` the model that answered, `attempts=` the chain; logger
   `minty-shared`, into `logs/core.log`).
   `minty_shared.model_input` makes the small copy the model reads (an image capped at 2048 px and
-  saved once as JPEG; a PDF's first page). The stored attachment is never changed.
+  saved once as JPEG; a PDF whole, every page - minty-shared v0.16, the user 2026-11-24; the 10 MB
+  limit stays). The stored attachment is never changed.
 
 ## The prompt (owner, 2026-11-20: "simple like this first")
 
