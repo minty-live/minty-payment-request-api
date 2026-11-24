@@ -6,6 +6,8 @@ from botocore.exceptions import ClientError
 from django.conf import settings
 from django.core.files.uploadedfile import UploadedFile
 from django.db import transaction
+from django.http import HttpResponse
+from minty_shared import images
 from minty_shared.storage import StorageError, make_client, put_file
 
 from bills.models import (
@@ -77,6 +79,25 @@ ALLOWED_EXTENSIONS = {
 
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
+PHOTO_WONT_OPEN = "This photo can't be opened. Attach it again as a JPEG or PNG."
+PHOTO_WONT_SHOW = "This photo can't be shown here."
+
+
+def heic_preview(att: Attachment, data: bytes) -> HttpResponse:
+    """A stored HEIC as an upright JPEG, made now and never stored, for a browser that can't draw
+    HEIC (the web asks ``/preview/?as=jpeg``; the user, 2026-11-24). A photo that no longer opens
+    is a 422 with ``PHOTO_WONT_SHOW``."""
+    try:
+        jpeg = images.to_jpeg(data)
+    except images.ImageError as exc:
+        logger.error("Attachment %s (HEIC) could not be made a JPEG to show: %s", att.id, exc)
+        raise BillValidationError(PHOTO_WONT_SHOW) from None
+    response = HttpResponse(jpeg, content_type=images.JPEG)
+    filename = images.jpeg_name(att.original_name or att.stored_name or "")
+    response["Content-Disposition"] = f'inline; filename="{filename}"'
+    response["X-Frame-Options"] = "SAMEORIGIN"
+    return response
+
 
 def _resolve_content_type(file: UploadedFile) -> str | None:
     """Resolve a usable content-type for an uploaded file.
@@ -129,6 +150,16 @@ def _upload_file_to_s3(file: UploadedFile, s3_key_prefix: str) -> dict:
 
     file.seek(0)
     raw = file.read()
+    # An iPhone HEIC (the user, 2026-11-24) is known by its bytes, whatever it was called, and is
+    # stored as it is - so it must open: it is made JPEG on the fly to preview or publish.
+    sniffed_heif = images.sniff_heif(raw[:16])
+    if sniffed_heif or images.is_heif(resolved_content_type):
+        try:
+            images.check_decodes(raw)
+        except images.ImageError as exc:
+            logger.warning("A HEIC attachment that won't open was refused (%s bytes): %s", len(raw), exc)
+            raise BillValidationError(PHOTO_WONT_OPEN) from None
+        resolved_content_type = sniffed_heif or resolved_content_type
     ext = os.path.splitext(file.name)[1] if file.name else ""
     stored_name = f"{uuid.uuid4().hex}{ext}"
     s3_key = f"{s3_key_prefix}/{stored_name}"

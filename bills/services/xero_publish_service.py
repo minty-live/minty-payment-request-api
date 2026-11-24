@@ -16,7 +16,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import connection, transaction
 from minty_db.models import Entity, XeroContactSync
-from minty_shared import logctx, names
+from minty_shared import images, logctx, names
 
 from bills.models import (
     Audit,
@@ -865,6 +865,16 @@ def _upload_bill_attachments_to_xero(bill, sync, entity_id, user_id, xero_org_id
         raw_filename = f"{invoice_number}_PAYMENTREQUEST{suffix}.{ext}"
         xero_filename = _sanitize_xero_filename(raw_filename)
         content_type = _resolve_xero_content_type(att.mime_type, ext)
+        try:
+            # Xero takes no HEIC: an iPhone photo goes as .jpg, made now (the user, 2026-11-24)
+            file_bytes, content_type, xero_filename = images.for_xero(
+                file_bytes, content_type, xero_filename,
+            )
+        except images.ImageError as exc:
+            logger.error(
+                "Xero attachment sync: attachment=%s (HEIC) could not be made a JPEG: %s", att.id, exc,
+            )
+            continue
 
         logger.info(
             "Xero attachment sync: uploading slot=%d file=%s content_type=%s size=%d bytes",
@@ -1329,6 +1339,16 @@ def upload_bankslip_to_xero(
         raw_filename = f"{invoice_number}_BANKSLIP{suffix}.{ext}"
         xero_filename = _sanitize_xero_filename(raw_filename)
         content_type = _resolve_xero_content_type(att.mime_type, ext)
+        try:
+            # Xero takes no HEIC: an iPhone photo goes as .jpg, made now (the user, 2026-11-24)
+            file_bytes, content_type, xero_filename = images.for_xero(
+                file_bytes, content_type, xero_filename,
+            )
+        except images.ImageError as exc:
+            logger.error(
+                "Xero bankslip sync: attachment=%s (HEIC) could not be made a JPEG: %s", att.id, exc,
+            )
+            continue
 
         logger.info(
             "Xero bankslip sync: uploading slot=%d file=%s content_type=%s size=%d bytes",

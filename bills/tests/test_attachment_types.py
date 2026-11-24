@@ -11,6 +11,7 @@ We assert:
     does not reject otherwise-valid uploads.
 """
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -130,9 +131,10 @@ class TestExpandedUploadTypes:
         client = MagicMock()
         client.generate_presigned_url.return_value = "https://example/download"
         mock_s3.return_value = client
+        # a real HEIC: one that won't open is refused since 2026-11-24 (test_heic_attachments.py)
         f = SimpleUploadedFile(
             "iphone.HEIC",
-            b"\x00\x00\x00\x18ftypheic",
+            (Path(__file__).parent / "fixtures" / "tiny.heic").read_bytes(),
             content_type="application/octet-stream",
         )
         resp = api_client.post(

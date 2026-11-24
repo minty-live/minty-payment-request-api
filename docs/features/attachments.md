@@ -19,10 +19,29 @@ bank slips are `payment_attachment` rows ([payments.md](payments.md)). Code:
 | `GET` | the list, each with a presigned download URL |
 | `DELETE …/{attachment_id}` | removes the object and the row (`attachment_deleted`) |
 | `GET …/{attachment_id}/download` | a 15-minute presigned URL |
-| `GET …/{attachment_id}/preview/` | the bytes streamed **through this service** — the browser's preview iframe cannot load a cross-origin B2 URL directly |
+| `GET …/{attachment_id}/preview/` | the bytes streamed **through this service** — the browser's preview iframe cannot load a cross-origin B2 URL directly. `?as=jpeg` turns a HEIC into an upright JPEG on the fly (below); any other file comes back as it is |
 
 Keys: `attachments/<entity_id>/<bill_id>/<name>`; the stored name and MIME type describe
-the bytes actually stored (a PNG may have been re-encoded). `storage_provider` is `s3`.
+the bytes actually stored, which are the uploaded bytes. `storage_provider` is `s3`.
+
+## iPhone HEIC (the user, 2026-11-24)
+
+A HEIC/HEIF photo is known by its bytes whatever it was called (`minty_shared.images.sniff_heif`;
+a HEIC named `photo.jpg` is stored as `image/heic`), must open (else 422 "This photo can't be
+opened. Attach it again as a JPEG or PNG."), and is stored as uploaded - no copy is kept. A JPEG
+is made on the fly only where HEIC can't be used:
+
+- **preview** - the web asks `…/preview/?as=jpeg` when the browser can't draw HEIC (Safari 17+
+  can; Chrome, Edge, Firefox and Android can't); `heic_preview` answers `image/jpeg`,
+  `<name>.jpg`, or 422 "This photo can't be shown here." if a stored one no longer opens. The
+  presigned URLs (list, `/download`) are unchanged and give the HEIC itself;
+- **Xero** - bill attachments and bank slips go through `minty_shared.images.for_xero`:
+  `<invoice>_PAYMENTREQUEST[_n].jpg` / `_BANKSLIP[_n].jpg`, `image/jpeg` (Xero takes no HEIC);
+  every other type is sent as it is;
+- **the invoice reader** - `minty_shared.ai.sniff_mime` knows HEIC and `model_input` sends the
+  model a JPEG, as for any photo.
+
+Tests: `bills/tests/test_heic_attachments.py` (fixture `bills/tests/fixtures/tiny.heic`).
 
 ## What Confirm needs
 

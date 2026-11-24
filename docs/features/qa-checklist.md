@@ -108,6 +108,10 @@ endpoint needs a real `user_entity` row before it answers anything.
 - [ ] A file over 10 MB is refused; a file is stored exactly as uploaded (same bytes, same type).
 - [ ] `DELETE …/{attachment_id}` removes both the B2 object and the row.
 - [ ] `GET …/{attachment_id}/download` returns a 15-minute presigned URL.
+- [ ] An iPhone HEIC is stored as uploaded (`image/heic`, no second object); one that won't
+      open is refused 422; `…/preview/?as=jpeg` answers an upright JPEG, while a PDF or JPEG
+      comes back unchanged; publishing sends it to Xero as `…_PAYMENTREQUEST.jpg` /
+      `…_BANKSLIP.jpg`.
 - [ ] `GET …/{attachment_id}/preview/` streams through this service (the preview iframe
       loads it without a cross-origin error — a direct B2 URL would fail here).
 - [ ] With `S3_URL` unset the service **refuses to start** (regression check, fixed

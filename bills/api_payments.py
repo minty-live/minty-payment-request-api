@@ -6,6 +6,7 @@ from django.core.exceptions import ValidationError
 from django.db.models import Sum
 from django.http import Http404, StreamingHttpResponse
 from minty_db.models import User
+from minty_shared import images
 from ninja import File, Query, Router
 from ninja.files import UploadedFile
 
@@ -27,6 +28,7 @@ from bills.services.attachment_service import (
     _get_s3_client,
     delete_payment_attachment,
     generate_presigned_download_url,
+    heic_preview,
     serialize_attachment,
     upload_payment_attachment,
 )
@@ -411,6 +413,10 @@ def preview_payment_attachment(
             e,
         )
         raise Http404("File not found in storage")
+
+    # ?as=jpeg: a HEIC for a browser that can't draw it (the user, 2026-11-24); anything else as it is
+    if request.GET.get("as") == "jpeg" and images.is_heif(att.mime_type):
+        return heic_preview(att, s3_response["Body"].read())
 
     content_type = att.mime_type or s3_response.get(
         "ContentType", "application/octet-stream"
