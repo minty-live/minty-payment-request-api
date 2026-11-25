@@ -494,9 +494,10 @@ def list_xero_contacts(request):
     summary="Map a supplier archived in Xero to another Xero contact now",
 )
 def link_xero_contact(request, contact_id: str, payload: XeroContactLinkIn):
-    """The supplier now uses that Xero contact (one of the company's active copies) - merged into
-    the supplier already holding it, if any (accounts-api's relink). Minty never restores anything
-    in Xero (C4)."""
+    """The supplier now uses that Xero contact (one of the company's active copies; accounts-api's
+    relink). One another supplier already has is refused with accounts-api's sentence - matching never
+    merges, the person merges the two in Settings first (the user, 2026-11-25). Minty never restores
+    anything in Xero (C4)."""
     import uuid as _uuid
 
     from minty_db.models import XeroContact, XeroContactSync
@@ -521,12 +522,8 @@ def link_xero_contact(request, contact_id: str, payload: XeroContactLinkIn):
     if copy is None:
         return 422, {"detail": "Choose one of your Xero contacts to use."}
     answer = relink(str(entity.id), contact.id, copy.xero_guid, "user", request.auth_user.id)
-    said = (
-        f"{contact.name} merged into the supplier that already uses {copy.name}."
-        if answer.get("merged")
-        else f"{contact.name} now uses {copy.name} in Xero."
-    )
-    return 200, {"message": said, "contact_id": answer.get("contact_id") or str(contact.id)}
+    return 200, {"message": f"{contact.name} now uses {copy.name} in Xero.",
+                 "contact_id": answer.get("contact_id") or str(contact.id)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════

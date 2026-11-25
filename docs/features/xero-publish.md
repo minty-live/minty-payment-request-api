@@ -83,7 +83,9 @@ in Xero and caches it.
   now.", archived_contacts: [{id, name}]}` (`PublishRefusedOut`), nothing sent. Minty never restores a
   contact in Xero ("+ Add" brings a deleted one back in Minty only).
 - "Map it now": `GET /api/v1/entity-bill-contacts/xero/` and
-  `POST /api/v1/entity-bill-contacts/{id}/xero-link/ {xero_contact_id}` (`check_publish_xero`).
+  `POST /api/v1/entity-bill-contacts/{id}/xero-link/ {xero_contact_id}` (`check_publish_xero`). A Xero
+  contact another supplier already has is refused with accounts-api's sentence (422 `detail`; matching
+  never merges - the person merges the two in Settings first, the user 2026-11-25).
 - A3: `books.stale_matches` uses the doc's sentence, and a line saved by code alone after its account left
   Xero (no `account_id`) is held too.
 - One contact list (C3): the picker's live Xero list leaves out a contact Minty deleted or merged away

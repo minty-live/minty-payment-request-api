@@ -103,3 +103,20 @@ def test_mapping_a_supplier_now_uses_one_of_the_companys_xero_contacts(
         resp = link("cid-beta")
     assert (resp.status_code, resp.json()["message"]) == (200, "Acme Ltd now uses Beta Ltd in Xero.")
     assert asked[0][:4] == (str(live.id), acme.id, "cid-beta", "user")
+
+
+@pytest.mark.django_db
+def test_mapping_now_to_a_xero_contact_another_supplier_has_says_merge_first(
+    api_client, auth_headers, test_user_entity, live
+):
+    """Matching never merges (the user, 2026-11-25): accounts-api refuses, and its sentence is shown."""
+    from core.exceptions import BillValidationError
+
+    acme = _supplier(live)
+    XeroContact.objects.create(entity_id=live.id, xero_org_id=ORG, xero_guid="cid-beta", name="Beta Ltd",
+                               status="ACTIVE")
+    sentence = "Beta Ltd already has that Xero contact. Merge the two in Settings first, or choose another contact."
+    with patch("bills.services.contact_service.relink", side_effect=BillValidationError(sentence)):
+        resp = api_client.post(f"/api/v1/entity-bill-contacts/{acme.id}/xero-link/",
+                               data={"xero_contact_id": "cid-beta"}, content_type="application/json", **auth_headers)
+    assert (resp.status_code, resp.json()["detail"]) == (422, sentence)

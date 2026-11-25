@@ -6227,7 +6227,7 @@
     },
     "/api/v1/entity-bill-contacts/{contact_id}/xero-link/": {
       "post": {
-        "description": "The supplier now uses that Xero contact (one of the company's active copies) - merged into\nthe supplier already holding it, if any (accounts-api's relink). Minty never restores anything\nin Xero (C4).",
+        "description": "The supplier now uses that Xero contact (one of the company's active copies; accounts-api's\nrelink). One another supplier already has is refused with accounts-api's sentence - matching never\nmerges, the person merges the two in Settings first (the user, 2026-11-25). Minty never restores\nanything in Xero (C4).",
         "operationId": "bills_api_config_link_xero_contact",
         "parameters": [
           {
