@@ -59,9 +59,8 @@ v0.10; minty-petty-cash-api's `docs/features/expense-ai.md` has the text): seven
 `due_date` for an invoice ("if only terms such as Net 30 are printed, add them to the invoice
 date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
 `validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
-Since minty-shared-py v0.17 (the user's wording, 2026-11-24) the account is "" when nothing in
-the list matches (v0.13's "closest, never empty" is undone); the prompt is the receipt's, plus the
-due date.
+Since minty-shared-py v0.21 (the user, 2026-11-25) the account is "the closest from the Chart of
+accounts", never ""; the prompt is the receipt's, plus the due date.
 
 ## Evidence (owner's launch decisions, 2026-11-23)
 
@@ -72,11 +71,12 @@ for, and when the document doesn't list it, the description is the "additional n
   (one line for receipts and invoices since v0.17, the user, 2026-11-24);
   the exchange rate is that same day's.
 - **`description`** is inferred from the supplier and context when no items are listed, with
-  `account_id` chosen to match; an inferred one comes in the `low` band with `inferred: true`, so
-  the page asks for a closer check. `""` only when it can't be inferred.
+  `account_id` chosen to match; an inferred one fills like any other (`medium`) with `inferred: true`,
+  and the page outlines it and the account orange, "Please check" (the user, 2026-11-25). `""`
+  only when it can't be inferred; the description is not mandatory, so that is answered too.
 - **Refusals** (`ai.evidence_refusal`, after the read, before any rate): more than one invoice in
-  the file (`document_count`) answers `{suggestions: null, reason: "several_documents"}`, then an
-  empty description `reason: "no_description"`. Either still counts as a read (a model answered).
+  the file (`document_count`) answers `{suggestions: null, reason: "several_documents"}` - the only
+  refusal since v0.21 (the user, 2026-11-25). It still counts as a read (a model answered).
 
 ## What the file may be instead (the user, 2026-11-24)
 

@@ -193,10 +193,10 @@ def validate(parsed: Reading, context: dict, aliases: ai_prompt.Aliases) -> dict
 
 def _description(parsed: Reading) -> dict:
     """What was bought (owner, 2026-11-23): inferred from the supplier and context when the
-    invoice lists no items - then in the ``low`` band, so the page asks for a closer check."""
+    invoice lists no items. An inferred one fills like any other, marked ``inferred`` - the page
+    outlines it and the account "Please check" (the user, 2026-11-25)."""
     text = (parsed.description or "").strip()[:_MAX_DESCRIPTION]
-    inferred = bool(text) and parsed.description_inferred
-    return ai.checked(text, {"inferred": inferred, **({"band": "low"} if inferred else {})})
+    return ai.checked(text, {"inferred": bool(text) and parsed.description_inferred})
 
 
 MAX_INVOICE_BYTES = 10 * 1024 * 1024
@@ -272,8 +272,8 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
     warning = ai.document_warning(suggestions.pop("document_type", None)) if suggestions else None
     refusal = ai.evidence_refusal(suggestions) if suggestions else None
     if refusal:
-        # several invoices in the file, or nothing describes what was paid for (owner, 2026-11-23):
-        # nothing is filled and the page says why; the read still counts (a model answered)
+        # several invoices in the file - the only refusal (the user, 2026-11-25): nothing is
+        # filled and the page says why; the read still counts (a model answered)
         logger.info("invoice reader: refused reason=%s entity=%s", refusal, entity_id)
         answer = {"suggestions": None, "reason": refusal}
     elif answer["suggestions"]:

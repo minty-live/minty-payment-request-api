@@ -44,11 +44,17 @@ def _read(api_client, auth_headers, model, **reply):
 
 @pytest.mark.usefixtures("test_user_entity", "lists")
 class TestTheRead:
-    @pytest.mark.parametrize("refused", [{"document_count": 2}, {"description": ""}])
-    def test_a_refused_read_asks_for_no_rate(self, api_client, auth_headers, model, rates, refused):
-        # owner, 2026-11-23: several invoices or nothing described - nothing is filled, so no rate
-        assert _read(api_client, auth_headers, model, currency="USD", amount=12.34, **refused) is None
+    def test_a_refused_read_asks_for_no_rate(self, api_client, auth_headers, model, rates):
+        # several invoices in the file (the only refusal, the user 2026-11-25): nothing is
+        # filled, so no rate
+        assert _read(api_client, auth_headers, model, currency="USD", amount=12.34, document_count=2) is None
         assert rates["asked"] == []
+
+    def test_a_read_with_no_description_is_still_converted(self, api_client, auth_headers, model, rates):
+        # the user, 2026-11-25: the description is not mandatory
+        s = _read(api_client, auth_headers, model, currency="USD", amount=12.34, description="")
+        assert s["amount"]["applied"] is True
+        assert [(f, t) for f, t, _ in rates["asked"]] == [("USD", "HKD")]
 
     def test_an_invoice_in_another_currency_comes_back_converted_on_its_own_day(self, api_client, auth_headers,
                                                                                  model, rates):

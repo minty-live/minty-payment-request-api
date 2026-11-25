@@ -422,32 +422,37 @@ class TestTheReplyIsChecked:
         for key in ("supplier", "account", "amount", "description", "invoice_date", "due_date"):
             assert (s[key]["band"], s[key]["applied"]) == ("medium", True), key
 
-    def test_nothing_usable_is_not_enough_evidence(self, api_client, auth_headers, model):
-        # owner, 2026-11-23: nothing describes what was paid for, so the page says why
+    def test_nothing_read_is_nothing_usable(self, api_client, auth_headers, model):
+        # the user, 2026-11-25: no description is no refusal - a reply with nothing at all is
+        # still the reader's own "nothing usable"
         empty = {"supplier_contact_id": "", "supplier_name": "", "account_id": "", "amount": 0,
                  "currency": "", "date": "", "description": "", "due_date": ""}
-        assert _read(api_client, auth_headers, model, **empty) == (None, "no_description")
+        s, reason = _read(api_client, auth_headers, model, **empty)
+        assert reason == "no_usable_field"
+        assert not any(s[f]["applied"] for f in ("supplier", "account", "amount", "description"))
 
 
 @pytest.mark.usefixtures("test_user_entity", "lists")
 class TestTheEvidenceRule:
-    """The owner's launch decisions (2026-11-23, after IRD's "A Guide to Keeping Business
-    Records"): one document per file, and what was paid for described or inferred."""
+    """One document per file - the only refusal (the user, 2026-11-25); the description is not
+    mandatory."""
 
-    def test_an_invoice_with_no_description_is_not_enough_evidence(self, api_client, auth_headers, model):
-        assert _read(api_client, auth_headers, model, description=" ") == (None, "no_description")
+    def test_an_invoice_with_no_description_is_answered(self, api_client, auth_headers, model):
+        s, reason = _read(api_client, auth_headers, model, description=" ")
+        assert reason is None and s["description"]["applied"] is False
+        assert s["amount"]["applied"] is True
 
     def test_several_invoices_in_one_file_are_refused_before_anything_else(self, api_client, auth_headers,
                                                                           model):
         refused = _read(api_client, auth_headers, model, document_count=2, description="")
         assert refused == (None, "several_documents")
 
-    def test_an_inferred_description_is_filled_and_marked_to_check_harder(self, api_client, auth_headers,
-                                                                          model):
+    def test_an_inferred_description_is_filled_and_marked_inferred(self, api_client, auth_headers, model):
+        # the user, 2026-11-25: filled like any other; the page outlines it "Please check"
         s, reason = _read(api_client, auth_headers, model, description="Software subscription",
                           description_inferred=True)
         assert reason is None and s["description"]["applied"] is True
-        assert (s["description"]["band"], s["description"]["inferred"]) == ("low", True)
+        assert (s["description"]["band"], s["description"]["inferred"]) == ("medium", True)
 
     def test_a_printed_description_stays_in_the_usual_band(self, api_client, auth_headers, model):
         s, _ = _read(api_client, auth_headers, model)
@@ -480,10 +485,10 @@ class TestTheDocumentWarning:
         assert _extract(api_client, auth_headers).json()["document_warning"] is None
 
     def test_the_warning_travels_on_a_refused_read_too(self, api_client, auth_headers, model):
-        model.answer = FakeResponse(_reply(description="", document_type="unreadable"))
+        model.answer = FakeResponse(_reply(document_count=2, document_type="unreadable"))
         body = _extract(api_client, auth_headers).json()
         assert (body["suggestions"], body["reason"], body["document_warning"]) == (
-            None, "no_description", "unreadable",
+            None, "several_documents", "unreadable",
         )
 
 
