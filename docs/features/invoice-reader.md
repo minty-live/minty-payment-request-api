@@ -63,7 +63,10 @@ v0.10; minty-petty-cash-api's `docs/features/expense-ai.md` has the text): seven
 date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
 `validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
 Since minty-shared-py v0.21 (the user, 2026-11-25) the account is "the closest from the Chart of
-accounts", never ""; the prompt is the receipt's, plus the due date.
+accounts", never ""; the prompt is the receipt's, plus the due date. Since v0.26 (the user,
+2026-11-26) the reply schema holds `account_id` to the short ids sent (`choices={"account_id":
+aliases.account_ids}`): Dine at Venus' codes look like ids (`6000_01_09`), and 7 of 10 reads answered
+the code in place of `acc_34`, which was dropped - the account came back empty.
 
 ## Evidence (owner's launch decisions, 2026-11-23)
 

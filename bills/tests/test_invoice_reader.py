@@ -162,6 +162,18 @@ def test_the_read_is_labelled_for_cloud_billing(api_client, auth_headers, test_u
                                         "entity_id": str(test_entity.id).lower()}
 
 
+def test_the_account_can_only_be_one_of_the_accounts_sent(api_client, auth_headers, test_user_entity,
+                                                          lists, model):
+    """The user, 2026-11-26: a code like 6000_01_09 came back in place of its short id and was
+    dropped (7 of 10 reads, Dine at Venus) - the reply schema holds account_id to the ids sent."""
+    _extract(api_client, auth_headers)
+    [request] = model.requests
+    sent = [line.split(" | ")[0] for line in _parts(request)[0].text.splitlines()
+            if line.startswith("acc_")]
+    assert sent
+    assert request["config"].response_json_schema["properties"]["account_id"]["enum"] == sent
+
+
 def test_the_prefix_carries_only_what_the_bill_form_offers(api_client, auth_headers, test_user_entity,
                                                            lists, model):
     _extract(api_client, auth_headers)
@@ -173,7 +185,8 @@ def test_the_prefix_carries_only_what_the_bill_form_offers(api_client, auth_head
         assert absent not in prefix
     assert "con_01 | ABC Printing" in prefix and "con_02 | Taxi Co" in prefix  # no org = legacy, kept
     assert "con-abc" not in prefix  # short ids only
-    assert "acc_02" not in json.dumps(model.requests[0]["config"].response_json_schema)
+    # the reply schema holds account_id to the short ids (2026-11-26); never the company's own ids
+    assert "con-abc" not in json.dumps(model.requests[0]["config"].response_json_schema)
 
 
 def test_one_contact_list_minty_made_in_merged_and_retired_out(api_client, auth_headers, test_user_entity,
