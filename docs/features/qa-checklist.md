@@ -96,7 +96,7 @@ endpoint needs a real `user_entity` row before it answers anything.
       paid; otherwise back to submitted. Each transition logs a `status_changed` audit line.
 - [ ] `PUT`/`DELETE …/payments/{id}` are elevated-only and re-run the status sync.
 - [ ] Bank-slip attachments (`…/payments/{payment}/attachments`) respect the 10 MB cap and
-      are stored exactly as uploaded (same bytes, same type).
+      store a photo as a JPEG of at most 2048 px, any other file as uploaded.
 - [ ] `POST /api/xero/upload-bankslip` is a full replace: republishing after adding another
       slip does not pile duplicates onto the Xero invoice (every FileId this payment
       uploaded before, plus anything on the invoice named `*_BANKSLIP*`, is deleted first),
@@ -105,11 +105,12 @@ endpoint needs a real `user_entity` row before it answers anything.
 ## Attachments ([attachments.md](attachments.md))
 
 - [ ] Upload is refused on a `void` bill.
-- [ ] A file over 10 MB is refused; a file is stored exactly as uploaded (same bytes, same type).
+- [ ] A file over 10 MB is refused; a photo is stored as an upright JPEG of at most 2048 px (a PNG
+      only when that is smaller), a PDF or document byte for byte; a photo that won't open is 422.
 - [ ] `DELETE …/{attachment_id}` removes both the B2 object and the row.
 - [ ] `GET …/{attachment_id}/download` returns a 15-minute presigned URL.
-- [ ] An iPhone HEIC is stored as uploaded (`image/heic`, no second object); one that won't
-      open is refused 422; `…/preview/?as=jpeg` answers an upright JPEG, while a PDF or JPEG
+- [ ] An iPhone HEIC is stored as an upright `.jpg` (`image/jpeg`, one object); one that won't
+      open is refused 422; for a HEIC stored before 2026-11-26 `…/preview/?as=jpeg` answers an upright JPEG, while a PDF or JPEG
       comes back unchanged; publishing sends it to Xero as `…_PAYMENTREQUEST.jpg` /
       `…_BANKSLIP.jpg`.
 - [ ] `GET …/{attachment_id}/preview/` streams through this service (the preview iframe

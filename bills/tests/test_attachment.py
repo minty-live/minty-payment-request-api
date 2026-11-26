@@ -3,6 +3,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from django.core.files.uploadedfile import SimpleUploadedFile
 
+from bills.tests.conftest import tiny_image
+
 
 @pytest.mark.django_db
 class TestAttachmentUpload:
@@ -35,7 +37,7 @@ class TestAttachmentUpload:
         mock_s3.return_value = MagicMock(**{"generate_presigned_url.return_value": "https://s3.test/signed"})
         file = SimpleUploadedFile(
             "photo.jpg",
-            b"fake-image-content",
+            tiny_image("JPEG"),
             content_type="image/jpeg",
         )
         resp = api_client.post(
@@ -55,7 +57,7 @@ class TestAttachmentUpload:
         pdf = SimpleUploadedFile(
             "invoice.pdf", b"pdf-data", content_type="application/pdf"
         )
-        jpg = SimpleUploadedFile("photo.jpg", b"jpg-data", content_type="image/jpeg")
+        jpg = SimpleUploadedFile("photo.jpg", tiny_image("JPEG"), content_type="image/jpeg")
         resp = api_client.post(
             f"/api/v1/bills/{draft_bill.id}/attachments",
             data={"files": [pdf, jpg]},

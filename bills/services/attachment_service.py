@@ -132,7 +132,8 @@ def _get_s3_client():
 
 
 def _upload_file_to_s3(file: UploadedFile, s3_key_prefix: str) -> dict:
-    """Validate and push an uploaded file to S3, stored exactly as uploaded (owner, 2026-11-04).
+    """Validate and push an uploaded file to S3: a photo compressed (``images.for_storage``; the
+    user, 2026-11-26), any other file as uploaded.
 
     Shared by the bill and payment upload paths, which differ only in the S3 key
     prefix (passed in) and in what they do afterwards. Performs no DB writes —
@@ -150,17 +151,19 @@ def _upload_file_to_s3(file: UploadedFile, s3_key_prefix: str) -> dict:
 
     file.seek(0)
     raw = file.read()
-    # An iPhone HEIC (the user, 2026-11-24) is known by its bytes, whatever it was called, and is
-    # stored as it is - so it must open: it is made JPEG on the fly to preview or publish.
-    sniffed_heif = images.sniff_heif(raw[:16])
-    if sniffed_heif or images.is_heif(resolved_content_type):
-        try:
-            images.check_decodes(raw)
-        except images.ImageError as exc:
-            logger.warning("A HEIC attachment that won't open was refused (%s bytes): %s", len(raw), exc)
-            raise BillValidationError(PHOTO_WONT_OPEN) from None
-        resolved_content_type = sniffed_heif or resolved_content_type
-    ext = os.path.splitext(file.name)[1] if file.name else ""
+    # B2 keeps photos compressed (the user, 2026-11-26): a JPEG, HEIC (known by its bytes, whatever
+    # it was called), WebP, BMP or TIFF is stored as a JPEG of at most 2048 px named <stem>.jpg, a
+    # PNG only when that is smaller; documents as uploaded. A photo that won't open is refused.
+    name = file.name or ""
+    resolved_content_type = images.sniff_heif(raw[:16]) or resolved_content_type
+    try:
+        raw, resolved_content_type, name = images.for_storage(raw, resolved_content_type, name)
+    except images.ImageError as exc:
+        logger.warning(
+            "A %s attachment that won't open was refused (%s bytes): %s", resolved_content_type, len(raw), exc
+        )
+        raise BillValidationError(PHOTO_WONT_OPEN) from None
+    ext = os.path.splitext(name)[1] if name else ""
     stored_name = f"{uuid.uuid4().hex}{ext}"
     s3_key = f"{s3_key_prefix}/{stored_name}"
 
@@ -172,7 +175,7 @@ def _upload_file_to_s3(file: UploadedFile, s3_key_prefix: str) -> dict:
         raise BillValidationError("I couldn't upload that file. Mind trying again?") from None
 
     return {
-        "original_name": file.name or "unnamed",
+        "original_name": name or "unnamed",
         "stored_name": stored_name,
         "file_path": s3_key,
         "mime_type": resolved_content_type,

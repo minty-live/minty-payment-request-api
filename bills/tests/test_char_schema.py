@@ -28,6 +28,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from minty_db.models import Entity, User, UserEntity, XeroContactSync
 
 from bills.models import Bill, Payment
+from bills.tests.conftest import tiny_image
 
 pytestmark = pytest.mark.django_db
 
@@ -204,7 +205,7 @@ def test_attachments_hang_off_the_bill_and_the_payment(api_client, headers, cler
     pay = post(api_client, f"/api/v1/bills/{bill_id}/payments",
                {"payment_date": "2026-09-10", "amount": "250.10", "payment_status": "completed",
                 "payment_method": "bank_transfer", "reference_no": "PAY-1"}, headers).json()
-    slip = SimpleUploadedFile("slip.png", b"\x89PNG fake", content_type="image/png")
+    slip = SimpleUploadedFile("slip.png", tiny_image("PNG"), content_type="image/png")
     with patch("bills.services.attachment_service._get_s3_client", return_value=fake_s3()):
         up2 = api_client.post(f"/api/v1/bills/{bill_id}/payments/{pay['id']}/attachments?attachment_role=bank_slip",
                               data={"file": slip}, **headers)

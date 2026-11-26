@@ -15,7 +15,7 @@ bank slips are `payment_attachment` rows ([payments.md](payments.md)). Code:
 
 | Verb | What |
 |---|---|
-| `POST` (multipart, one or more files, `attachment_role`) | upload; refused on a `void` bill; 10 MB per file (`MAX_FILE_SIZE`); stored exactly as uploaded - no downsizing, no conversion (owner, 2026-11-04), ContentType set, two retries; an audit line `attachment_uploaded` |
+| `POST` (multipart, one or more files, `attachment_role`) | upload; refused on a `void` bill; 10 MB per file (`MAX_FILE_SIZE`); a photo stored compressed (the user, 2026-11-26, replacing the owner's 2026-11-04 "exactly as uploaded") - `minty_shared.images.for_storage`: JPEG, HEIC, WebP, BMP, TIFF as an upright JPEG of at most 2048 px, quality 85, no EXIF (`stored_name`, `file_extension`, `mime_type` and `original_name` become `.jpg`/`image/jpeg`), a PNG only when the JPEG is smaller, every other file as uploaded; a photo that won't open is 422; ContentType set, two retries; an audit line `attachment_uploaded` |
 | `GET` | the list, each with a presigned download URL |
 | `DELETE …/{attachment_id}` | removes the object and the row (`attachment_deleted`) |
 | `GET …/{attachment_id}/download` | a 15-minute presigned URL |
@@ -28,8 +28,8 @@ the bytes actually stored, which are the uploaded bytes. `storage_provider` is `
 
 A HEIC/HEIF photo is known by its bytes whatever it was called (`minty_shared.images.sniff_heif`;
 a HEIC named `photo.jpg` is stored as `image/heic`), must open (else 422 "This photo can't be
-opened. Attach it again as a JPEG or PNG."), and is stored as uploaded - no copy is kept. A JPEG
-is made on the fly only where HEIC can't be used:
+opened. Attach it again as a JPEG or PNG."), and since 2026-11-26 is stored as an upright JPEG
+(above). One stored 2026-11-24..26 is still HEIC in B2, so for those a JPEG is made on the fly where HEIC can't be used:
 
 - **preview** - the web asks `…/preview/?as=jpeg` when the browser can't draw HEIC (Safari 17+
   can; Chrome, Edge, Firefox and Android can't); `heic_preview` answers `image/jpeg`,

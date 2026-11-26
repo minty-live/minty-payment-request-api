@@ -1,6 +1,7 @@
-"""iPhone HEIC attachments (the user, 2026-11-24): stored exactly as uploaded; a JPEG is made on the
-fly only where HEIC can't be used - ``/preview/?as=jpeg`` (a browser that can't draw it) and the
-Xero publish (Xero takes no HEIC). No copy is ever stored."""
+"""iPhone HEIC attachments: stored as an upright JPEG since 2026-11-26 (the user; B2 keeps photos
+compressed). A HEIC stored 2026-11-24..26 is still HEIC in B2, so a JPEG is made on the fly where
+HEIC can't be used - ``/preview/?as=jpeg`` (a browser that can't draw it) and the Xero publish
+(Xero takes no HEIC)."""
 
 import datetime
 import io
@@ -66,15 +67,17 @@ def _upload(api_client, auth_headers, bill, name, data, content_type):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize("content_type", ["image/heic", "application/octet-stream", ""])
-def test_a_heic_is_stored_exactly_as_uploaded(api_client, auth_headers, draft_bill, test_user_entity,
-                                               content_type):
+def test_a_heic_is_stored_as_an_upright_jpeg(api_client, auth_headers, draft_bill, test_user_entity,
+                                             content_type):
+    """2026-11-26 (the user): B2 keeps photos compressed, in a type Xero takes."""
     resp, bucket = _upload(api_client, auth_headers, draft_bill, "IMG_1234.HEIC", HEIC, content_type)
 
     assert resp.status_code == 201, resp.content
     [(key, (data, extra))] = bucket.put.items()  # one object: no copy
-    assert data == HEIC and key.endswith(".HEIC")
-    assert extra == {"ContentType": "image/heic"}
-    assert resp.json()[0]["attachment"]["mime_type"] == "image/heic"
+    assert _image(data) == ("JPEG", (40, 80)) and key.endswith(".jpg")
+    assert extra == {"ContentType": "image/jpeg"}
+    attachment = resp.json()[0]["attachment"]
+    assert (attachment["mime_type"], attachment["original_name"]) == ("image/jpeg", "IMG_1234.jpg")
 
 
 @pytest.mark.django_db
@@ -83,8 +86,8 @@ def test_a_heic_named_like_a_jpeg_is_known_by_its_bytes(api_client, auth_headers
 
     assert resp.status_code == 201, resp.content
     [(data, extra)] = bucket.put.values()
-    assert data == HEIC and extra == {"ContentType": "image/heic"}
-    assert resp.json()[0]["attachment"]["mime_type"] == "image/heic"
+    assert _image(data) == ("JPEG", (40, 80)) and extra == {"ContentType": "image/jpeg"}
+    assert resp.json()[0]["attachment"]["mime_type"] == "image/jpeg"
 
 
 @pytest.mark.django_db

@@ -121,6 +121,18 @@ def give_xero_token(user, access_token="access-token", *, expires_in=1800, obtai
     return row
 
 
+def tiny_image(fmt: str = "JPEG") -> bytes:
+    """A real 8x8 image: photos are decoded when stored (the user, 2026-11-26). This small, a PNG
+    and a quality-50 JPEG are kept byte for byte - re-saving would not make them smaller."""
+    from io import BytesIO
+
+    from PIL import Image
+
+    buf = BytesIO()
+    Image.new("RGB", (8, 8), (30, 140, 200)).save(buf, format=fmt, **({"quality": 50} if fmt == "JPEG" else {}))
+    return buf.getvalue()
+
+
 @pytest.fixture
 def test_entity(db):
     return Entity.objects.create(

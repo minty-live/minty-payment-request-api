@@ -143,9 +143,9 @@ class TestExpandedUploadTypes:
             **auth_headers,
         )
         assert resp.status_code == 201, resp.content
-        # The stored mime_type must be the resolved one, not octet-stream,
-        # otherwise Xero will reject the file later.
-        assert resp.json()[0]["attachment"]["mime_type"] == "image/heic"
+        # Known by its bytes, never octet-stream: since 2026-11-26 (the user) it is stored as the
+        # JPEG Xero takes.
+        assert resp.json()[0]["attachment"]["mime_type"] == "image/jpeg"
 
 
 # ─── Xero helpers ──────────────────────────────────────────────────────

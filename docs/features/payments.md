@@ -46,8 +46,8 @@ A payment carries its own attachments (`payment_attachment`, role `bank_slip`):
 `…/preview/` (proxied through the service so the browser can show it inline without a
 cross-origin block). Keys are `attachments/payments/<bill>/<payment>/…` in the shared B2 bucket (bill
 attachments sit under `attachments/<entity>/<bill>/…`),
-stored exactly as uploaded (no downsizing, owner 2026-11-04), 10 MB cap. A HEIC bank slip
-previews with `?as=jpeg` and goes to Xero as JPEG, made on the fly ([attachments.md](attachments.md#iphone-heic-the-user-2026-11-24)).
+a photo stored as a 2048 px JPEG, any other file as uploaded (the user, 2026-11-26), 10 MB cap. A HEIC bank slip
+stored before that previews with `?as=jpeg` and goes to Xero as JPEG, made on the fly ([attachments.md](attachments.md#iphone-heic-the-user-2026-11-24)).
 
 `POST /api/xero/upload-bankslip` (`bills/api_xero_actions.py`) pushes a payment's slips to
 the Xero invoice as a **full replace** (`upload_bankslip_to_xero`): every FileId this
