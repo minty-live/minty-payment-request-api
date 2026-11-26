@@ -1,7 +1,7 @@
 # Invoice reader - reading an invoice into the new-bill form
 
-When an invoice is attached in minty-payment-request-web's new-bill form and the person presses
-**Read invoice** (never on attaching it - owner, 2026-11-18), a vision model reads it
+When an invoice is attached in minty-payment-request-web's new-bill form it is read at once (the
+user, 2026-11-26; until then only on a **Read invoice** press - owner, 2026-11-18): a vision model reads it
 and the form's empty fields are **filled as suggestions** the person checks (owner, 2026-11-04):
 the supplier, the invoice and due dates, the amount, the description and the account. Nothing is
 saved until Confirm or Save as Draft. A supplier the company does not have is added
@@ -16,7 +16,7 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
 
 - `GET /api/v1/bills/extract/status/` (`bills/api.py::extract_status_endpoint`, 2026-11-18) -
   a usable `ai_policy` with `invoice_reader_on`, read on the call, with the company's AI allowance
-  left (below): the form offers "Read invoice" only when it is on. Asked by the same people as the read
+  left (below): the form reads a new invoice only when it is on and not used up. Asked by the same people as the read
   (403 otherwise).
 - `POST /api/v1/bills/extract/` (`bills/api.py::extract_invoice_endpoint`) - multipart, one
   `invoice`. Who may ask: `check_create_bill` and not a system superuser outside their own
@@ -210,10 +210,13 @@ minty-petty-cash-api's `python manage.py ai_policy`, never a release:
   `minty_shared.ai.APPROVED_PROVIDERS` (Gemini today) is ever called; a model id names its provider
   (`gemini-...`, or `<provider>:<model>`), so another approved provider can be added later.
 - **The answer** carries `reader` - `{enabled, percent_left, reads_used, reads_limit, reads_left,
-  blocked, resumes_at}` - after every read, so the page's "80% of your AI allowance left" moves
+  blocked, resumes_at, first_read_at}` - after every read, so the page's "80% of your AI allowance left" moves
   with no extra call. `percent_left` is measured over the grants that still have room (a top-up
   after a spent grant reads 100%). Used up, the route answers `limit_reached` without asking the
-  model and the page disables the button.
+  model and the page disables the button. `first_read_at` (2026-11-26, minty-shared v0.27): the
+  signed-in person's earliest answered read, any company, either reader (ISO or null) - the page
+  shows the large reading cat for 24 hours from it, the small one after; worked out from
+  `ai_read`, no column of its own. A too-large file's answer also names `max_file_mb`.
 - The in-process `RateLimiter` and `*_RATE_USER_PER_MIN`/`*_RATE_ENTITY_PER_HOUR` are gone (replaced).
 - **Production:** Vertex AI on its `global` endpoint (minty-shared v0.12; below).
 

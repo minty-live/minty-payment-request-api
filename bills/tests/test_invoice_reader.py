@@ -228,6 +228,14 @@ def test_refusals_past_the_checks_are_a_silent_no_suggestion(api_client, auth_he
     assert model.requests == [] and not AiRead.objects.exists()  # refused before a read: none used
 
 
+def test_too_large_names_the_limit_so_the_page_can_say_it(api_client, auth_headers,
+                                                         test_user_entity, lists, model):
+    """The user, 2026-11-26: "This file is too large (max 10 MB)." - the limit is ai_policy's."""
+    _policy(max_file_mb=1)
+    body = _extract(api_client, auth_headers, body=BIG_PDF).json()
+    assert (body["reason"], body["max_file_mb"]) == ("file_too_large", 1)
+
+
 def test_the_receipt_reader_s_switch_does_not_turn_on_the_invoice_reader(api_client, auth_headers,
                                                                          test_user_entity, lists, model):
     _policy(receipt_reader_on=True, invoice_reader_on=False)
@@ -320,9 +328,28 @@ def test_the_form_learns_whether_the_reader_is_on(api_client, auth_headers, test
 
     expected = {"enabled": False}
     if enabled:
+        # first_read_at: the signed-in person has never read (sizes the reading cat, 2026-11-26)
         expected = {"enabled": True, "reads_used": None, "reads_limit": None, "reads_left": None,
-                    "percent_left": 100, "blocked": False, "resumes_at": None}
+                    "percent_left": 100, "blocked": False, "resumes_at": None, "first_read_at": None}
     assert resp.status_code == 200 and resp.json() == expected
+
+
+def test_the_answer_says_when_this_person_first_read(api_client, auth_headers, test_user,
+                                                     test_user_entity, lists, model):
+    """The user, 2026-11-26: the reading cat is large on a person's first day, small after - from
+    their earliest answered read, any company, either reader."""
+    assert api_client.get(STATUS_URL, **auth_headers).json()["first_read_at"] is None
+    first = _extract(api_client, auth_headers).json()["reader"]["first_read_at"]
+    row = AiRead.objects.get(user_id=test_user.id, status="ok")
+    assert first == row.created_at.isoformat()
+    assert api_client.get(STATUS_URL, **auth_headers).json()["first_read_at"] == first
+
+
+def test_a_failed_read_is_not_this_person_s_first_read(api_client, auth_headers, test_user,
+                                                      test_entity, test_user_entity, ai_policy):
+    AiRead.objects.create(entity_id=test_entity.id, user_id=test_user.id, module="payment_request",
+                          status="failed")
+    assert api_client.get(STATUS_URL, **auth_headers).json()["first_read_at"] is None
 
 
 def test_the_reader_s_status_is_asked_by_those_who_may_read(api_client, auth_headers, test_user, test_entity,

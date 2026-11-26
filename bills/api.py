@@ -184,7 +184,7 @@ def extract_status_endpoint(request):
     as ``POST /extract/``."""
     check_not_system_superuser(request, "read invoices")
     check_create_bill(request.entity_role)
-    return invoice_reader.reader_status(request.entity_id)
+    return invoice_reader.reader_status(request.entity_id, str(request.auth_user.id))
 
 
 @bills_router.post(

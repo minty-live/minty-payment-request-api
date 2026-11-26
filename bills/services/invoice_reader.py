@@ -224,13 +224,23 @@ def checked_invoice(uploads) -> tuple[bytes, str]:
     return data, mime
 
 
-def reader_status(entity_id) -> dict:
-    """The form's reader: whether "Read with AI" is offered, and the company's reads left
-    (shared with Petty Cash; owner, 2026-11-18)."""
-    return ai_allowance.reader_status(ai_allowance.READER_INVOICE, entity_id)
+def reader_status(entity_id, user_id=None) -> dict:
+    """The form's reader: whether "Read with AI" is offered, the company's reads left (shared with
+    Petty Cash; owner, 2026-11-18) and, with the signed-in person, ``first_read_at``, which sizes
+    the reading cat (2026-11-26)."""
+    return ai_allowance.reader_status(ai_allowance.READER_INVOICE, entity_id, user_id)
 
 
 def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
+    """``_read_invoice``'s answer, with the person's ``first_read_at`` in a switched-on ``reader``
+    (after this read, so a first read flips the reading cat to small on the next one)."""
+    answer = _read_invoice(entity_id, user_id, data, mime)
+    if answer["reader"].get("enabled"):
+        answer["reader"]["first_read_at"] = ai_allowance.first_read_at(user_id)
+    return answer
+
+
+def _read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
     """``{suggestions, reason, reader}`` for an invoice the route has checked (who asks, one
     PDF/JPEG/PNG by its bytes, at most 10 MB). ``suggestions`` is null on every failure; ``reader``
     is the allowance after this read. A read is reserved before the model is called and counts
@@ -242,7 +252,9 @@ def read_invoice(entity_id, user_id, data: bytes, mime: str) -> dict:
     if not config.enabled:
         return {"suggestions": None, "reason": ai.REASON_DISABLED, "reader": {"enabled": False}}
     if len(data) > config.max_file_bytes:
-        return _no_read(ai.REASON_FILE_TOO_LARGE, entity_id, policy)
+        # the limit, so the page can say it (the user, 2026-11-26: "max 10 MB")
+        return {**_no_read(ai.REASON_FILE_TOO_LARGE, entity_id, policy),
+                "max_file_mb": config.max_file_mb}
     context = build_context(entity_id)
     if context is None:
         logger.info("invoice reader: no bill accounts or suppliers for entity=%s", entity_id)
