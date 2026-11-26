@@ -46,7 +46,10 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
     the company's places first.
 - `minty_shared.ai` (minty-shared-py, extra `ai`) - the engine: the switch, the models and their
   failover, the call and its one retry, usage and cost, and the ONE log line (numbers only, never a
-  value read off an invoice; `model=` the model that answered, `attempts=` the chain; logger
+  value read off an invoice; `model=` the model that answered, `attempts=` the chain, `unanswered=`
+  the calls sent that got no reply - minty-shared v0.23: each also has its own `call not answered`
+  warning, and `ai_read.attempts` shows it as `model:outcome(N unanswered)`, because Google may bill
+  such a call though its tokens are unknown; logger
   `minty-shared`, into `logs/core.log`).
   `minty_shared.model_input` makes the small copy the model reads (an image capped at 2048 px and
   saved once as JPEG; a PDF whole, every page - minty-shared v0.16, the user 2026-11-24; the 10 MB
