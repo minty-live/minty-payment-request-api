@@ -25,7 +25,7 @@ environment names only Vertex AI's project, ``GOOGLE_CLOUD_PROJECT``, with
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.conf import settings
@@ -46,9 +46,11 @@ logger = logging.getLogger("minty-api")
 _MAX_AMOUNT = Decimal("10000000")
 _MAX_FOREIGN_AMOUNT = Decimal("999999999999")
 _MAX_DESCRIPTION = 200
+#: Payment terms longer than a year are taken as a misread (the user, 2026-11-27).
+_MAX_TERMS_DAYS = 365
 
 
-#: The reply's model: the owner's simple prompt plus the due date.
+#: The reply's model: the owner's simple prompt plus the due date, period end and terms.
 Reading = ai_prompt.InvoiceReading
 
 
@@ -171,11 +173,7 @@ def validate(parsed: Reading, context: dict, aliases: ai_prompt.Aliases) -> dict
     except (InvalidOperation, ValueError, TypeError):
         amount_value = ""
 
-    invoice_date = _iso_date(parsed.date)
-    due_date = _iso_date(parsed.due_date)
-    if invoice_date and due_date and due_date < invoice_date:
-        logger.info("invoice reader: dropped a due date before the invoice date")
-        due_date = ""
+    invoice_date, due_field = _bill_dates(parsed)
 
     return {
         "supplier": supplier,
@@ -183,12 +181,32 @@ def validate(parsed: Reading, context: dict, aliases: ai_prompt.Aliases) -> dict
         "amount": ai.checked(amount_value),
         "description": _description(parsed),
         "invoice_date": ai.checked(invoice_date),
-        "due_date": ai.checked(due_date),
+        "due_date": due_field,
         "currency": currency,
         "entity_currency": context["entity"]["currency"],
         "document_count": parsed.document_count,
         "document_type": parsed.document_type,
     }
+
+
+def _bill_dates(parsed: Reading) -> tuple[str, dict]:
+    """The bill's dates (the user, 2026-11-27). Invoice date: the printed one, else a period's last
+    day. Due date, never blank once there is an invoice date: the printed one (on or after the
+    invoice date), else the invoice date + the payment terms' days, else the invoice date itself,
+    marked ``fallback`` - the page asks for a check, as the bill may show overdue once saved."""
+    invoice_date = _iso_date(parsed.date) or _iso_date(parsed.period_end)
+    due_date = _iso_date(parsed.due_date)
+    if not invoice_date:
+        return "", ai.checked(due_date)
+    if due_date and due_date >= invoice_date:
+        return invoice_date, ai.checked(due_date)
+    if due_date:
+        logger.info("invoice reader: a due date before the invoice date was not used")
+    days = parsed.payment_terms_days or 0
+    if 0 < days <= _MAX_TERMS_DAYS:
+        due = (date.fromisoformat(invoice_date) + timedelta(days=days)).isoformat()
+        return invoice_date, ai.checked(due)
+    return invoice_date, ai.checked(invoice_date, {"fallback": True})
 
 
 def _description(parsed: Reading) -> dict:

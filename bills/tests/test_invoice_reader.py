@@ -436,10 +436,52 @@ class TestTheReplyIsChecked:
         assert s["amount"]["value"] == "1200"
         assert (s["currency"], s["entity_currency"]) == ("JPY", "JPY")
 
-    def test_a_due_date_before_the_invoice_date_is_dropped(self, api_client, auth_headers, model):
-        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="2026-10-01")
+    # the user's bill-date rules, 2026-11-27: the due date is never left blank
+    def test_a_printed_due_date_is_used_and_not_marked(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, due_date="2026-11-19", payment_terms_days=7)
+        assert s["due_date"]["value"] == "2026-11-19" and s["due_date"]["applied"] is True
+        assert not s["due_date"].get("fallback")
+
+    def test_payment_terms_add_their_days_to_the_invoice_date(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="",
+                     payment_terms_days=30)
+        assert s["due_date"]["value"] == "2026-11-19" and not s["due_date"].get("fallback")
+
+    def test_nothing_printed_falls_back_to_the_invoice_date_marked(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="")
+        assert s["due_date"]["value"] == "2026-10-20" and s["due_date"]["applied"] is True
+        assert s["due_date"]["fallback"] is True
+
+    def test_a_due_date_before_the_invoice_date_goes_to_the_terms(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="2026-10-01",
+                     payment_terms_days=14)
         assert s["invoice_date"]["value"] == "2026-10-20"
+        assert s["due_date"]["value"] == "2026-11-03" and not s["due_date"].get("fallback")
+
+    def test_a_due_date_before_the_invoice_date_without_terms_falls_back(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="2026-10-01")
+        assert s["due_date"]["value"] == "2026-10-20" and s["due_date"]["fallback"] is True
+
+    @pytest.mark.parametrize("days", [-5, 0, 1000])
+    def test_terms_out_of_range_are_ignored(self, api_client, auth_headers, model, days):
+        s, _ = _read(api_client, auth_headers, model, date="2026-10-20", due_date="",
+                     payment_terms_days=days)
+        assert s["due_date"]["value"] == "2026-10-20" and s["due_date"]["fallback"] is True
+
+    def test_a_period_only_gives_its_last_day_as_the_invoice_date(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="", period_end="2026-10-31", due_date="")
+        assert s["invoice_date"]["value"] == "2026-10-31"
+        assert s["due_date"]["value"] == "2026-10-31" and s["due_date"]["fallback"] is True
+
+    def test_a_printed_invoice_date_wins_over_a_period(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="2026-11-03", period_end="2026-10-31")
+        assert s["invoice_date"]["value"] == "2026-11-03"
+
+    def test_no_invoice_date_leaves_the_due_date_to_what_is_printed(self, api_client, auth_headers, model):
+        s, _ = _read(api_client, auth_headers, model, date="", due_date="", payment_terms_days=30)
         assert s["due_date"]["value"] == "" and s["due_date"]["applied"] is False
+        s, _ = _read(api_client, auth_headers, model, date="", due_date="2026-11-19")
+        assert s["due_date"]["value"] == "2026-11-19"
 
     @pytest.mark.parametrize("value", ["20/10/2026", "2026-13-40", "soon"])
     def test_a_date_that_is_not_a_date_is_dropped(self, api_client, auth_headers, model, value):
@@ -534,7 +576,9 @@ class TestTheDocumentWarning:
 
 def test_the_instruction_is_the_owners_simple_prompt_with_the_due_date_and_no_bill_number():
     instruction = ai_prompt.instruction("invoice")
-    assert "- due_date: ISO 8601 date (YYYY-MM-DD)" in instruction
+    assert "- due_date: the due date printed on the document" in instruction
+    assert "- period_end:" in instruction and "- payment_terms_days:" in instruction
+    assert {"period_end", "payment_terms_days"} <= set(invoice_reader.Reading.model_fields)
     assert "bill number" not in instruction.lower() and "invoice number" not in instruction.lower()
     assert "bill_number" not in invoice_reader.Reading.model_fields
 

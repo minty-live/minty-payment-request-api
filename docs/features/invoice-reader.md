@@ -39,7 +39,7 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
     codes; an account added by hand has no Xero id).
   - **Checks**: a short id (supplier or account) is accepted only if it was sent; the amount is a
     positive decimal up to 10,000,000 in the company currency's own places (JPY 0); a date that is
-    not `YYYY-MM-DD` is dropped, and so is a due date before the invoice date; the description is
+    not `YYYY-MM-DD` is dropped; the description is
     capped at 200 characters and an unmatched supplier name (`detected_name`, with its signed
     `new_supplier_token`) at 100. A bill always takes the company's currency: an invoice
     in another one has its amount converted (below), kept as read until then - never rounded to
@@ -59,9 +59,17 @@ It is built the same way as Petty Cash's receipt reader (minty-petty-cash-api's
 
 The owner's simple prompt, shared with the receipt reader (`minty_shared.ai_prompt`, minty-shared-py
 v0.10; minty-petty-cash-api's `docs/features/expense-ai.md` has the text): seven fields plus
-`due_date` for an invoice ("if only terms such as Net 30 are printed, add them to the invoice
-date"), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
+`due_date`, `period_end` and `payment_terms_days` for an invoice (what is printed only - the
+model never works a date out), the Entity, the accounts and the suppliers listed by short ids (`acc_01`, `con_01`) that
 `validate` maps back to the code and the supplier, JSON only. The bill number is not asked for.
+
+**Bill dates** (the user, 2026-11-27; `_bill_dates`, minty-shared-py v0.28's prompt): the invoice
+date is the printed one, else the period's last day (a utility or phone bill for 1-31 Oct reads
+31 Oct). The due date is never left blank once there is an invoice date: the printed due date when
+it is on or after the invoice date; else the invoice date + `payment_terms_days` (1-365; "Net 30",
+"within 14 days"); else the invoice date itself, marked `fallback: true` so the page asks for a
+check (the bill may show overdue once saved). A printed due date before the invoice date goes on
+to the terms. No invoice date at all: the due date is only what is printed.
 Since minty-shared-py v0.21 (the user, 2026-11-25) the account is "the closest from the Chart of
 accounts", never ""; the prompt is the receipt's, plus the due date. Since v0.26 (the user,
 2026-11-26) the reply schema holds `account_id` to the short ids sent (`choices={"account_id":
