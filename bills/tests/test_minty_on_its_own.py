@@ -50,6 +50,21 @@ def test_a_line_names_its_account_by_id(draft_bill, test_entity):
 
 
 @pytest.mark.django_db
+def test_a_line_keeps_an_account_the_company_archived(draft_bill, test_entity):
+    """Archived in Settings (the user, 2026-11-27): out of the picker, still on old bills - a bill edit
+    rewrites its lines by code, and the line keeps its account. One Xero archived (status ARCHIVED)
+    still doesn't count."""
+    rent = _account(test_entity, "469", "Rent")
+    AccountInfo.objects.filter(id=rent.id).update(record_status="archived")  # status stays ACTIVE
+    line = BillLine.objects.create(bill=draft_bill, description="May rent", account_code="469", line_amount=100)
+    assert line.account_id == rent.id
+
+    _account(test_entity, "470", "Old", archived=True)
+    gone = BillLine.objects.create(bill=draft_bill, description="x", account_code="470", line_amount=1)
+    assert gone.account_id is None
+
+
+@pytest.mark.django_db
 def test_an_unknown_code_leaves_no_account(draft_bill):
     line = BillLine.objects.create(bill=draft_bill, description="x", account_code="999", line_amount=1)
     assert line.account_id is None
@@ -85,6 +100,29 @@ def test_a_supplier_is_kept_in_minty_with_no_xero_call(api_client, auth_headers,
     assert again.status_code == 201 and again.json()["id"] == str(row.id)
     listed = api_client.get("/api/v1/entity-bill-contacts/", **auth_headers).json()
     assert [(c["id"], c["name"]) for c in listed] == [(str(row.id), "Corner Bakery")]
+
+
+@pytest.mark.django_db
+def test_a_supplier_added_while_xero_is_off_is_marked_for_the_reconnect(api_client, auth_headers,
+                                                                       test_user_entity, test_entity):
+    """A disconnected company is Minty-only (the user, 2026-11-27): the supplier is marked
+    (``minty_changed_at``) so the reconnect's matching asks about it; one that never had Xero isn't."""
+    Entity.objects.filter(id=test_entity.id).update(xero_org_id="11111111-2222-3333-4444-555555555555",
+                                                    status="disconnected", setup_mode="xero")
+    with patch("requests.post", side_effect=AssertionError("no Xero call")):
+        resp = api_client.post("/api/v1/entity-bill-contacts/", data={"name": "Corner Bakery"},
+                               content_type="application/json", **auth_headers)
+    assert resp.status_code == 201, resp.content
+    row = XeroContactSync.objects.get(id=resp.json()["id"])
+    assert (row.xero_contact_id, row.minty_changed_at is not None) == (None, True)
+
+
+@pytest.mark.django_db
+def test_a_supplier_of_a_company_that_never_had_xero_is_not_marked(api_client, auth_headers, test_user_entity,
+                                                                   minty):
+    resp = api_client.post("/api/v1/entity-bill-contacts/", data={"name": "Corner Bakery"},
+                           content_type="application/json", **auth_headers)
+    assert XeroContactSync.objects.get(id=resp.json()["id"]).minty_changed_at is None
 
 
 @pytest.mark.django_db

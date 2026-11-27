@@ -23,6 +23,7 @@ import requests
 from django.conf import settings
 from django.db import IntegrityError, transaction
 from django.db.models import Q
+from django.utils import timezone
 from minty_db.models import Entity, XeroContact, XeroContactSync
 from minty_shared import names
 
@@ -311,10 +312,13 @@ def held_contact(entity_id: str, name: str) -> XeroContactSync | None:
     )
 
 
-def _kept_in_minty(entity_id: str, name: str) -> dict:
+def _kept_in_minty(entity: Entity, name: str) -> dict:
     """No live connection (owner, 2026-11-12; was: only a company keeping its books in Minty): the
-    supplier is the company's own row, with no Xero call - the next live sync puts it in Xero."""
-    row = XeroContactSync.objects.create(entity_id=entity_id, name=" ".join(name.split()), source="user")
+    supplier is the company's own row, with no Xero call - the reconnect's matching asks about it. One
+    holding an organisation (disconnected) marks it (``minty_changed_at``; the user, 2026-11-27)."""
+    entity_id = entity.id
+    row = XeroContactSync.objects.create(entity_id=entity_id, name=" ".join(name.split()), source="user",
+                                         minty_changed_at=timezone.now() if entity.xero_org_id else None)
     logger.info("Supplier %s kept in Minty for company %s", row.id, entity_id)
     return _db_to_bill_contact(row)
 
@@ -613,7 +617,7 @@ def create_entity_bill_contact_in_xero(
     if back is not None:
         return _db_to_bill_contact(back)
     if offline:
-        return _kept_in_minty(entity_id, cleaned)
+        return _kept_in_minty(entity, cleaned)
 
     access_token = token_for()
     xero_org_id = str(entity.xero_org_id)

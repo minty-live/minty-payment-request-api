@@ -225,8 +225,10 @@ class BillLine(models.Model):
     def _account_for_code(self):
         """The company's active account with this line's code: Xero's code, or one made in Minty.
 
-        No active one: an account with that code merged away stands for the account it was merged
-        into, so a bill edited with its old code keeps its account."""
+        No active one: one the company archived in Settings (the user, 2026-11-27: out of the pickers,
+        still on old bills - Xero's status untouched, so never one Xero archived), so a bill edited
+        with its code keeps it; else an account with that code merged away stands for the account it
+        was merged into, so a bill edited with its old code keeps its account."""
         code = (self.account_code or "").strip()
         if not code or not self.bill_id:
             return None
@@ -238,6 +240,12 @@ class BillLine(models.Model):
         active = AccountInfo.objects.filter(entity_id=entity_id, status="ACTIVE", record_status="active")
         found = (active.filter(xero_code=code).values_list("id", flat=True).first()
                  or active.filter(code=code).values_list("id", flat=True).first())
+        if found:
+            return found
+        archived = AccountInfo.objects.filter(entity_id=entity_id, status="ACTIVE", record_status="archived",
+                                              merged_into__isnull=True)
+        found = (archived.filter(xero_code=code).values_list("id", flat=True).first()
+                 or archived.filter(code=code).values_list("id", flat=True).first())
         if found:
             return found
         merged = AccountInfo.objects.filter(entity_id=entity_id, merged_into__isnull=False)
