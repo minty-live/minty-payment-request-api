@@ -159,15 +159,17 @@ def publish_bill_to_xero(bill_id: str, entity_id: str, user_id: str, access_toke
     # ContactID. Put it in Xero first: Xero's contact of that name, else a new one.
     linked = XeroContactSync.objects.filter(id=bill.contact_id).first() if bill.contact_id else None
     if linked is not None and not linked.xero_contact_id:
-        from bills.services.contact_service import xero_contact_for
+        from bills.services.contact_service import take_xero_name, xero_contact_for
 
         try:
-            contact_id, _name = xero_contact_for(entity, access_token, linked.name)
+            contact_id, xero_name = xero_contact_for(entity, access_token, linked.name)
         except BillValidationError as refused:
             raise BillValidationError(
                 f"{linked.name} isn't in Xero yet, and Xero didn't take it: {refused}"
             ) from None
         XeroContactSync.objects.filter(id=linked.id).update(xero_contact_id=contact_id, xero_org_id=str(xero_org_id))
+        take_xero_name(entity.id, linked, xero_name)  # Xero's name at the link (the user, 2026-11-27)
+        bill.contact_name = linked.name[:100]
         bill._xero_contact_id_cache = None
         logger.info("publish: supplier %s put in Xero as %s for bill %s", linked.id, contact_id, bill.id)
 

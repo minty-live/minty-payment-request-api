@@ -342,7 +342,7 @@ def _xero_refusal(resp) -> str:
     return "Xero rejected the new contact. Check the name and try again."
 
 
-def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> str | None:
+def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> dict | None:
     """Xero's active contact named ``name`` (case, spaces and punctuation ignored) the company
     doesn't hold yet, searched live: ``GET /Contacts?searchTerm=`` is Xero's loose case-insensitive
     substring search (the accounting API spec's ``getContacts``), so it is asked for the name's
@@ -370,7 +370,7 @@ def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> s
         raise BillValidationError("Xero replied in a shape I didn't expect. Mind trying again?") from None
     return next(
         (
-            c["ContactID"]
+            c
             for c in contacts
             if c.get("ContactID")
             and names.same_name(c.get("Name"), name)
@@ -379,6 +379,20 @@ def _search_xero(xero_org_id: str, access_token: str, name: str, held: set) -> s
         ),
         None,
     )
+
+
+def take_xero_name(entity_id, contact: XeroContactSync, xero_name) -> None:
+    """A supplier linked to a Xero contact takes Xero's name at the link (the user, 2026-11-27: linked
+    contacts are changed in Xero and Minty follows), and the bills on it follow at once."""
+    from bills.models import Bill
+
+    name = (xero_name or "").strip()[:150]
+    if not name or name == contact.name:
+        return
+    XeroContactSync.objects.filter(id=contact.id).update(name=name)
+    contact.name = name
+    Bill.objects.filter(entity_id=entity_id, contact_id=contact.id).exclude(contact_name=name[:100]).update(
+        contact_name=name[:100])
 
 
 def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str, str]:
@@ -400,11 +414,13 @@ def xero_contact_for(entity: Entity, access_token: str, name: str) -> tuple[str,
         ),
         None,
     )
+    # Xero's own name: a contact takes it at the link (the user, 2026-11-27), never a silent flip at
+    # the next sync
     if copy is not None:
-        return copy.xero_guid, " ".join(name.split())[:150]
+        return copy.xero_guid, (copy.name or " ".join(name.split()))[:150]
     found = _search_xero(xero_org_id, access_token, name, held)
     if found is not None:
-        return found, " ".join(name.split())[:150]
+        return found["ContactID"], (found.get("Name") or " ".join(name.split())).strip()[:150]
     headers = {
         "Authorization": f"Bearer {access_token}",
         "Xero-Tenant-Id": xero_org_id,
@@ -604,13 +620,14 @@ def create_entity_bill_contact_in_xero(
         # the company's own supplier, kept only in Minty, added again while live: put in Xero too
         # (owner's decisions doc C5, 2026-11-20, as onboarding-api's chart) - the same row, linked
         # to Xero's contact of its name or one made there; another row holding it is the supplier
-        contact_id, _ = xero_contact_for(entity, token_for(), held.name)
+        contact_id, xero_name = xero_contact_for(entity, token_for(), held.name)
         holder = XeroContactSync.objects.filter(entity_id=entity_id, xero_contact_id=contact_id).first()
         if holder is not None:
             return _db_to_bill_contact(holder)
         XeroContactSync.objects.filter(id=held.id).update(xero_contact_id=contact_id,
                                                          xero_org_id=str(entity.xero_org_id))
         held.xero_contact_id, held.xero_org_id = contact_id, str(entity.xero_org_id)
+        take_xero_name(entity_id, held, xero_name)
         return _db_to_bill_contact(held)
 
     back = _brought_back(entity, cleaned, offline, token_for)

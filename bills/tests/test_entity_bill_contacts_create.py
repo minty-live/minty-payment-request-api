@@ -129,6 +129,10 @@ class TestEntityBillContactsCreate:
         give_xero_token(test_user, "fake-xero-token")
         own = XeroContactSync.objects.create(entity_id=test_entity.id, xero_contact_id=None, name="Acme Ltd",
                                              source="user")
+        from bills.models import Bill
+
+        bill = Bill.objects.create(entity_id=test_entity.id, reference="B-ACME", contact_id=own.id,
+                                   contact_name="Acme Ltd")
         XeroContact.objects.create(
             entity_id=test_entity.id, xero_org_id="org-abc", xero_guid="cid-kept", name="ACME LTD", status="ACTIVE"
         )
@@ -142,6 +146,9 @@ class TestEntityBillContactsCreate:
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-kept"
         own.refresh_from_db()
         assert (own.xero_contact_id, own.xero_org_id) == ("cid-kept", "org-abc")
+        # Xero's name at the link, its bills relabelled at once (the user, 2026-11-27)
+        assert own.name == "ACME LTD"
+        assert Bill.objects.get(id=bill.id).contact_name == "ACME LTD"
         assert XeroContactSync.objects.filter(entity_id=test_entity.id).count() == 1
         mock_post.assert_not_called()  # linked to Xero's own: nothing made there
 
@@ -171,6 +178,7 @@ class TestEntityBillContactsCreate:
                 **auth_headers,
             )
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-kept"
+        assert XeroContactSync.objects.get(xero_contact_id="cid-kept").name == "Acme Ltd"  # Xero's name
         mock_post.assert_not_called()
 
     def test_a_live_company_links_the_contact_xero_has_of_that_name_never_a_twin(
@@ -201,6 +209,7 @@ class TestEntityBillContactsCreate:
                 **auth_headers,
             )
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-acme"
+        assert XeroContactSync.objects.get(xero_contact_id="cid-acme").name == "ACME  LTD"  # Xero's name
         mock_post.assert_not_called()
 
     def test_a_name_typed_another_way_is_that_supplier(
@@ -262,6 +271,7 @@ class TestEntityBillContactsCreate:
                 **auth_headers,
             )
         assert resp.status_code == 201 and resp.json()["xero_contact_id"] == "cid-7"
+        assert XeroContactSync.objects.get(xero_contact_id="cid-7").name == "7-ELEVEN"  # Xero's name
         assert mock_get.call_args[1]["params"]["searchTerm"] == "Eleven"
         mock_post.assert_not_called()
 

@@ -50,7 +50,9 @@ local `postgres`; Supabase waits for the owner), and Minty's load now does the s
 **A disconnected company** keeps its Xero organisation (2026-11-10, minty-accounts-api): the token
 lookup (`xero_token_service._resolve_token`) refuses it before any token is looked at - _This company
 is disconnected from Xero. Reconnect Xero to publish._ - so a member's own Xero token never stands in
-for the connection the company dropped. A supplier it adds is kept in Minty and marked
+for the connection the company dropped. A supplier linked to an existing Xero contact - at
+"+ Add" while live (C5) or at publish - takes Xero's name and its bills follow
+(`contact_service.take_xero_name`; the user, 2026-11-27). A supplier it adds is kept in Minty and marked
 (`minty_changed_at`; the user, 2026-11-27: disconnected = Minty-only), so the reconnect's matching asks
 about it. An account archived in Settings leaves the bill picker (its `entity_bill_account_xero` row off)
 and stays on old bills: `BillLine._account_for_code` takes an archived account (Xero's status still

@@ -587,6 +587,28 @@ class TestASupplierMadeOfflineGoesToXeroFirst:
         row.refresh_from_db()
         assert (row.xero_contact_id, row.xero_org_id) == ("x-kee", FAKE_ORG_ID)
 
+    def test_xeros_contact_of_that_name_is_linked_under_xeros_name(self, fall_entity, fall_user, fall_user_entity):
+        """Xero has the contact, named another way: the supplier is linked to it and takes Xero's name,
+        the bill relabelled (the user, 2026-11-27) - never a silent flip at the next sync."""
+        row = XeroContactSync.objects.create(entity_id=fall_entity.id, name="7 Eleven", source="user")
+        bill = self._bill(fall_entity, fall_user, row)
+        found = MagicMock(status_code=200)
+        found.json.return_value = {"Contacts": [{"ContactID": "x-7", "Name": "7-Eleven", "ContactStatus": "ACTIVE"}]}
+        with (
+            patch("bills.services.contact_service.requests.get", return_value=found),
+            patch("bills.services.contact_service.requests.post") as mock_post,
+            patch(_PUT_PATH, return_value=_xero_200()),
+            patch(_UPLOAD_ATTACHMENTS_PATH),
+            patch(_UPLOAD_BANKSLIPS_PATH),
+        ):
+            publish_bill_to_xero(str(bill.id), fall_entity.id, FAKE_USER_ID, FAKE_ACCESS_TOKEN)
+
+        mock_post.assert_not_called()  # linked, nothing made in Xero
+        row.refresh_from_db()
+        assert (row.xero_contact_id, row.name) == ("x-7", "7-Eleven")
+        bill.refresh_from_db()
+        assert bill.contact_name == "7-Eleven"
+
     def test_xero_refusing_it_names_the_supplier_and_publishes_nothing(
         self, fall_entity, fall_user, fall_user_entity
     ):
