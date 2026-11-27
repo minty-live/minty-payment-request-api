@@ -543,8 +543,8 @@ def test_the_instruction_is_the_owners_simple_prompt_with_the_due_date_and_no_bi
 
 
 @pytest.mark.usefixtures("test_user_entity", "lists")
-def test_the_first_read_gives_the_one_time_grant_and_a_used_up_grant_stops_reading(api_client, auth_headers,
-                                                                                    test_entity, model):
+def test_the_first_read_gives_the_ai_trial_and_a_used_up_trial_stops_reading(api_client, auth_headers,
+                                                                              test_entity, model):
     _policy(default_grant={"tokens": 5000})
 
     first = _extract(api_client, auth_headers).json()  # 5,700 tokens: the crossing read finishes
@@ -554,7 +554,7 @@ def test_the_first_read_gives_the_one_time_grant_and_a_used_up_grant_stops_readi
     assert (refused["suggestions"], refused["reason"]) == (None, "limit_reached")
     assert len(model.requests) == 1
     [grant] = AiGrant.objects.filter(entity_id=test_entity.id)
-    assert (grant.source, grant.tokens_total) == ("default", 5000)
+    assert (grant.source, grant.tokens_total) == ("trial", 5000)
 
 
 @pytest.mark.usefixtures("test_user_entity", "lists")

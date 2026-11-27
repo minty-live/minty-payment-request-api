@@ -217,14 +217,23 @@ MODEL_PRICES = {
 
 
 @pytest.fixture
-def ai_policy(db):
+def ai_policy(db, test_entity):
     """minty-db's one ``ai_policy`` row (seed_catalogue.sql writes it in a real database): one
-    model, no backup, no extra caps, a default grant large enough for a test's many reads (the
-    grant rules themselves are minty-petty-cash-api's tests), and the invoice reader on with the
-    columns' own limits (owner, 2026-11-20: the switch is the row's). A test changes it as an
-    operator would."""
-    from minty_db.models import AiPolicy
+    model, no backup, no extra caps, an AI trial large enough for a test's many reads (the grant
+    rules themselves are minty-petty-cash-api's tests), and the invoice reader on with the columns'
+    own limits (owner, 2026-11-20: the switch is the row's). A test changes it as an operator would.
+    The company started its Payment Request trial yesterday, so its AI trial runs (the user,
+    2026-11-27: the AI trial starts with the company's first module trial)."""
+    from datetime import timedelta
 
+    from django.utils import timezone
+    from minty_db.models import AiPolicy, EntityModuleSubscription
+
+    started = timezone.now() - timedelta(days=1)
+    row = EntityModuleSubscription.objects.create(
+        entity_id=test_entity.id, function_code="PAYMENT_REQUEST", phase="trial",
+        trial_end=started + timedelta(days=30), app_access_until=started + timedelta(days=30))
+    EntityModuleSubscription.objects.filter(id=row.id).update(created_at=started)
     return AiPolicy.objects.create(id=1, primary_model="gemini-3.8-flash", backup_model=None,
                                    default_grant={"tokens": 1000000}, limit_rules=[], invoice_reader_on=True,
                                    model_prices=MODEL_PRICES)
